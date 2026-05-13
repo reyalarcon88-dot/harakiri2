@@ -1,0 +1,164 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-geist-sans);
+  --font-mono: var(--font-geist-mono);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+}
+
+:root {
+  color-scheme: light;
+  --radius: 0.625rem;
+
+  /* Fondo: off-white azulado muy sutil — las cards (blancas) flotan sobre él */
+  --background: oklch(0.971 0.006 220);
+  --foreground: oklch(0.138 0.012 250);
+
+  /* Card: blanco casi puro — diferenciado del fondo */
+  --card: oklch(0.9998 0.002 220);
+  --card-foreground: oklch(0.138 0.012 250);
+
+  --popover: oklch(0.988 0.012 185);
+  --popover-foreground: oklch(0.17 0.025 185);
+
+  /* Primary: negro profundo con toque azul — botones elegantes */
+  --primary: oklch(0.178 0.01 255);
+  --primary-foreground: oklch(0.985 0 0);
+
+  /* Muted y Secondary: gris-azulado suave — row headers, tags, fondos secundarios */
+  --secondary: oklch(0.951 0.009 220);
+  --secondary-foreground: oklch(0.2 0.01 250);
+  --muted: oklch(0.951 0.009 220);
+
+  /* muted-foreground: suficientemente oscuro para leer, menos neutro que gris puro */
+  --muted-foreground: oklch(0.495 0.014 240);
+
+  --accent: oklch(0.92 0.04 175);
+  --accent-foreground: oklch(0.2 0.065 178);
+  --destructive: oklch(0.577 0.245 27.325);
+
+  /* Borders: toque cool — no plano neutral */
+  --border: oklch(0.893 0.01 220);
+  --input: oklch(0.893 0.01 220);
+  --ring: oklch(0.62 0.105 170);
+
+  --chart-1: oklch(0.646 0.222 41.116);
+  --chart-2: oklch(0.6 0.118 184.704);
+  --chart-3: oklch(0.398 0.07 227.392);
+  --chart-4: oklch(0.828 0.189 84.429);
+  --chart-5: oklch(0.769 0.188 70.08);
+
+  /* Sidebar: sin cambios — el teal ya define bien la marca */
+  --sidebar: oklch(0.975 0.025 165);
+  --sidebar-foreground: oklch(0.22 0.055 170);
+  --sidebar-primary: oklch(0.42 0.11 170);
+  --sidebar-primary-foreground: oklch(0.99 0.005 165);
+  --sidebar-accent: oklch(0.91 0.06 165);
+  --sidebar-accent-foreground: oklch(0.2 0.075 170);
+  --sidebar-border: oklch(0.86 0.045 165);
+  --sidebar-ring: oklch(0.62 0.105 170);
+}
+
+.dark {
+  color-scheme: dark;
+  /* ── Solarized Dark ──────────────────────────────────────────────────── */
+  /* Base03 #002b36 — fondo principal (el más oscuro) */
+  --background: oklch(0.165 0.055 205);
+  /* Base0 #839496 — texto cuerpo: la clave de que no canse los ojos */
+  --foreground: oklch(0.625 0.018 198);
+
+  /* Base02 #073642 — superficie elevada (cards, paneles) */
+  --card: oklch(0.215 0.058 205);
+  --card-foreground: oklch(0.625 0.018 198);
+
+  --popover: oklch(0.215 0.058 205);
+  /* Base1 #93a1a1 — énfasis, texto más destacado */
+  --popover-foreground: oklch(0.665 0.013 196);
+
+  /* Cyan #2aa198 — acción primaria / color de marca */
+  --primary: oklch(0.62 0.115 185);
+  --primary-foreground: oklch(0.165 0.055 205);
+
+  /* Hover/surface secundaria — entre Base02 y Base01 */
+  --secondary: oklch(0.245 0.056 205);
+  --secondary-foreground: oklch(0.665 0.013 196);
+
+  --muted: oklch(0.245 0.056 205);
+  /* Base01 #586e75 — metadatos, texto terciario */
+  --muted-foreground: oklch(0.47 0.035 205);
+
+  /* Hover de items de menú — un escalón sobre Base02 */
+  --accent: oklch(0.255 0.056 205);
+  --accent-foreground: oklch(0.665 0.013 196);
+
+  /* Red #dc322f — destructivo */
+  --destructive: oklch(0.52 0.215 27);
+
+  /* Bordes: Base01 muy diluido — sin líneas grises duras */
+  --border: oklch(0.47 0.035 205 / 28%);
+  --input: oklch(0.47 0.035 205 / 22%);
+  --ring: oklch(0.62 0.115 185);
+
+  /* Charts — paleta Solarized completa */
+  --chart-1: oklch(0.57 0.155 237);   /* Blue  #268bd2 */
+  --chart-2: oklch(0.62 0.115 185);   /* Cyan  #2aa198 */
+  --chart-3: oklch(0.59 0.155 127);   /* Green #859900 */
+  --chart-4: oklch(0.60 0.14 88);     /* Yellow #b58900 */
+  --chart-5: oklch(0.53 0.17 48);     /* Orange #cb4b16 */
+
+  /* Sidebar: Base02 como fondo, se distingue del contenido (Base03) */
+  --sidebar: oklch(0.215 0.058 205);
+  --sidebar-foreground: oklch(0.625 0.018 198);
+  --sidebar-primary: oklch(0.62 0.115 185);
+  --sidebar-primary-foreground: oklch(0.165 0.055 205);
+  --sidebar-accent: oklch(0.26 0.057 205);
+  --sidebar-accent-foreground: oklch(0.665 0.013 196);
+  --sidebar-border: oklch(0.47 0.035 205 / 35%);
+  --sidebar-ring: oklch(0.62 0.115 185);
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+}

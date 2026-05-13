@@ -1,0 +1,446 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Warehouse {
+  id          String   @id @default(cuid())
+  name        String
+  location    String   @default("")
+  description String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  racks Racks[]
+
+  @@map("warehouses")
+}
+
+model Racks {
+  id          String    @id @default(cuid())
+  warehouseId String    @map("warehouse_id")
+  name        String
+  description String    @default("")
+  sortOrder   Int       @default(0) @map("sort_order")
+  createdAt   DateTime  @default(now()) @map("created_at")
+
+  warehouse Warehouse @relation(fields: [warehouseId], references: [id], onDelete: Cascade)
+  shelves   Shelves[]
+
+  @@map("racks")
+}
+
+model Shelves {
+  id          String  @id @default(cuid())
+  rackId      String  @map("rack_id")
+  name        String
+  description String  @default("")
+  sortOrder   Int     @default(0) @map("sort_order")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  rack                Racks              @relation(fields: [rackId], references: [id], onDelete: Cascade)
+  productStocks       ProductShelfStock[]
+  purchaseItems       PurchaseItems[]
+  dispatchItems       DispatchItems[]
+  returnItemsFrom     ReturnItems[] @relation("ReturnFrom")
+  returnItemsTo       ReturnItems[] @relation("ReturnTo")
+  transfersFrom       Transfers[] @relation("TransferFrom")
+  transfersTo         Transfers[] @relation("TransferTo")
+  preferredByProducts Products[] @relation("ProductPreferredShelf")
+
+  @@map("shelves")
+}
+
+model Products {
+  id               String  @id @default(cuid())
+  code             String  @unique
+  name             String
+  family              String  @default("")
+  engineeringSection  String  @default("") @map("engineering_section")
+  color               String  @default("") @map("color")
+  unitOfMeasure    String  @default("unidad") @map("unit_of_measure")
+  unitQuantity     String  @default("") @map("unit_quantity")
+  minStock         Decimal @default(0) @map("min_stock")
+  currentStock     Decimal @default(0) @map("current_stock")
+  referencePrice   Float   @default(0) @map("reference_price")
+  preferredShelfId String? @map("preferred_shelf_id")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  preferredShelf        Shelves?               @relation("ProductPreferredShelf", fields: [preferredShelfId], references: [id], onDelete: SetNull)
+  shelfStocks           ProductShelfStock[]
+  purchaseItems         PurchaseItems[]
+  projectMaterials      ProjectMaterials[]
+  dispatchItems         DispatchItems[]
+  returnItemsDelivered  ReturnItems[]         @relation("ReturnDelivered")
+  returnItemsReceived   ReturnItems[]         @relation("ReturnReceived")
+  transfers             Transfers[]
+  templateItems         MaterialTemplateItems[]
+  recepcionItems        RecepcionItem[]
+  supplierReturns       SupplierReturns[]
+
+  @@map("products")
+}
+
+model ProductShelfStock {
+  id                    String  @id @default(cuid())
+  productId             String  @map("product_id")
+  shelfId               String  @map("shelf_id")
+  quantity              Decimal @default(0)
+  reserveQuantity       Decimal @default(0) @map("reserve_quantity")
+  isReserveShelf        Boolean @default(false) @map("is_reserve_shelf")
+  reserveMinimum        Decimal @default(0) @map("reserve_minimum")
+  reserveNotes          String  @default("") @map("reserve_notes")
+
+  product Products @relation(fields: [productId], references: [id], onDelete: Cascade)
+  shelf   Shelves  @relation(fields: [shelfId], references: [id], onDelete: Cascade)
+
+  @@unique([productId, shelfId])
+  @@map("product_shelf_stock")
+}
+
+model Suppliers {
+  id          String   @id @default(cuid())
+  name        String
+  contactName String   @default("") @map("contact_name")
+  email       String   @default("")
+  phone       String   @default("")
+  address     String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  purchases Purchases[]
+
+  @@map("suppliers")
+}
+
+model Clients {
+  id          String   @id @default(cuid())
+  name        String
+  contactName String   @default("") @map("contact_name")
+  email       String   @default("")
+  phone       String   @default("")
+  address     String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  projects Projects[]
+
+  @@map("clients")
+}
+
+model Contractors {
+  id          String   @id @default(cuid())
+  name        String
+  contactName String   @default("") @map("contact_name")
+  email       String   @default("")
+  phone       String   @default("")
+  specialty   String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  projects Projects[]
+
+  @@map("contractors")
+}
+
+model Purchases {
+  id           String   @id @default(cuid())
+  purchaseCode String   @unique @map("purchase_code")
+  poNumber     String   @default("") @map("po_number")
+  supplierId   String   @map("supplier_id")
+  projectId    String?  @map("project_id")
+  purchaseDate String   @map("purchase_date")
+  notes            String   @default("")
+  status           String   @default("pending")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  supplier       Suppliers           @relation(fields: [supplierId], references: [id])
+  project        Projects?           @relation(fields: [projectId], references: [id])
+  documents      PurchaseDocuments[]
+  items          PurchaseItems[]
+  recepcionItems RecepcionItem[]
+  supplierReturns SupplierReturns[]
+
+  @@map("purchases")
+}
+
+model PurchaseDocuments {
+  id          String   @id @default(cuid())
+  purchaseId  String   @map("purchase_id")
+  fileName    String   @map("file_name")
+  fileUrl     String   @map("file_url")
+  fileSize    Int      @default(0) @map("file_size")
+  fileType    String   @default("") @map("file_type")
+  uploadedAt  DateTime @default(now()) @map("uploaded_at")
+
+  purchase Purchases @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+
+  @@map("purchase_documents")
+}
+
+model PurchaseItems {
+  id          String   @id @default(cuid())
+  purchaseId  String   @map("purchase_id")
+  productId   String   @map("product_id")
+  shelfId     String?  @map("shelf_id")
+  quantity    Decimal
+  unitPrice   Float    @map("unit_price")
+  priceSource String   @default("reference") @map("price_source")
+  notes       String   @default("")
+
+  purchase Purchases @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  product  Products  @relation(fields: [productId], references: [id])
+  shelf    Shelves?  @relation(fields: [shelfId], references: [id])
+
+  @@map("purchase_items")
+}
+
+model SupplierReturns {
+  id         String   @id @default(cuid())
+  purchaseId String   @map("purchase_id")
+  productId  String   @map("product_id")
+  quantity   Decimal
+  reason     String   @default("damaged")
+  notes      String   @default("")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  purchase Purchases @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  product  Products  @relation(fields: [productId], references: [id])
+
+  @@map("supplier_returns")
+}
+
+model Projects {
+  id           String   @id @default(cuid())
+  name         String
+  poNumber     String   @default("") @map("po_number")
+  projectType  String   @default("") @map("project_type")
+  clientId     String   @map("client_id")
+  contractorId String?  @map("contractor_id")
+  projectDate  String   @default("") @map("project_date")
+  startDate    String?  @map("start_date")
+  endDate      String?  @map("end_date")
+  status       String   @default("planned")
+  budget       Float    @default(0)
+  notes        String   @default("")
+  color        String   @default("")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  client              Clients            @relation(fields: [clientId], references: [id])
+  contractor          Contractors?       @relation(fields: [contractorId], references: [id])
+  materials           ProjectMaterials[]
+  dispatches          Dispatches[]
+  returns             Returns[]
+  documents           ProjectDocuments[]
+  purchases           Purchases[]
+  tasks               Tasks[]
+  expenses            ProjectExpenses[]
+
+  @@map("projects")
+}
+
+model ProjectMaterials {
+  id                String @id @default(cuid())
+  projectId         String @map("project_id")
+  productId         String @map("product_id")
+  plannedQuantity       Decimal @map("planned_quantity")
+  dispatchedQuantity    Decimal @default(0) @map("dispatched_quantity")
+  includeReserveStock   Boolean @default(false) @map("include_reserve_stock")
+  reserveUsedQuantity   Decimal @default(0) @map("reserve_used_quantity")
+  engineeringSection    String  @default("") @map("engineering_section")
+  sortOrder         Int    @default(0) @map("sort_order")
+  createdAt         DateTime @default(now()) @map("created_at")
+
+  project   Projects @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  product   Products @relation(fields: [productId], references: [id])
+
+  @@map("project_materials")
+}
+
+model Dispatches {
+  id          String   @id @default(cuid())
+  projectId   String   @map("project_id")
+  dispatchDate String  @map("dispatch_date")
+  notes       String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  project Projects       @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items   DispatchItems[]
+
+  @@map("dispatches")
+}
+
+model DispatchItems {
+  id          String  @id @default(cuid())
+  dispatchId  String  @map("dispatch_id")
+  productId   String  @map("product_id")
+  shelfId     String? @map("shelf_id")
+  quantity    Decimal
+
+  dispatch Dispatches @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
+  product  Products   @relation(fields: [productId], references: [id])
+  shelf    Shelves?   @relation(fields: [shelfId], references: [id])
+
+  @@map("dispatch_items")
+}
+
+model Returns {
+  id          String   @id @default(cuid())
+  projectId   String   @map("project_id")
+  returnDate  String   @map("return_date")
+  notes       String   @default("")
+  status      String   @default("pending")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  project        Projects      @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  items          ReturnItems[]
+  recepcionItems RecepcionItem[]
+
+  @@map("returns")
+}
+
+model ReturnItems {
+  id                    String  @id @default(cuid())
+  returnId              String  @map("return_id")
+  productIdDelivered    String  @map("product_id_delivered")
+  productIdReturned     String? @map("product_id_returned")
+  quantityDelivered     Decimal @map("quantity_delivered")
+  quantityReturned      Decimal @map("quantity_returned")
+  shelfIdFrom           String? @map("shelf_id_from")
+  shelfIdTo             String? @map("shelf_id_to")
+  changeType            String  @default("full_return") @map("change_type")
+  specificationDelivered String @default("") @map("specification_delivered")
+  specificationReturned  String @default("") @map("specification_returned")
+  notes                 String  @default("")
+  createdAt             DateTime @default(now()) @map("created_at")
+
+  return             Returns   @relation(fields: [returnId], references: [id], onDelete: Cascade)
+  productDelivered   Products  @relation("ReturnDelivered", fields: [productIdDelivered], references: [id])
+  productReturned    Products? @relation("ReturnReceived", fields: [productIdReturned], references: [id])
+  shelfFrom          Shelves?  @relation("ReturnFrom", fields: [shelfIdFrom], references: [id])
+  shelfTo            Shelves?  @relation("ReturnTo", fields: [shelfIdTo], references: [id])
+
+  @@map("return_items")
+}
+
+model Transfers {
+  id           String   @id @default(cuid())
+  fromShelfId  String   @map("from_shelf_id")
+  toShelfId    String   @map("to_shelf_id")
+  productId    String   @map("product_id")
+  quantity     Decimal
+  transferDate String   @map("transfer_date")
+  notes        String   @default("")
+  createdAt    DateTime @default(now()) @map("created_at")
+
+  fromShelf Shelves  @relation("TransferFrom", fields: [fromShelfId], references: [id])
+  toShelf   Shelves  @relation("TransferTo", fields: [toShelfId], references: [id])
+  product   Products @relation(fields: [productId], references: [id])
+
+  @@map("transfers")
+}
+
+model MaterialTemplates {
+  id          String   @id @default(cuid())
+  name        String
+  projectType String   @default("") @map("project_type")
+  description String   @default("")
+  sourceFileName String @default("") @map("source_file_name")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  items MaterialTemplateItems[]
+
+  @@map("material_templates")
+}
+
+model MaterialTemplateItems {
+  id              String @id @default(cuid())
+  templateId      String @map("template_id")
+  productId       String @map("product_id")
+  plannedQuantity Decimal @map("planned_quantity")
+  section         String @default("")
+  sortOrder       Int    @default(0) @map("sort_order")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  template MaterialTemplates @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  product  Products          @relation(fields: [productId], references: [id])
+
+  @@map("material_template_items")
+}
+
+model RecepcionItem {
+  id         String   @id @default(cuid())
+  productId  String   @map("product_id")
+  quantity   Decimal
+  purchaseId String?  @map("purchase_id")
+  returnId   String?  @map("return_id")
+  notes      String   @default("")
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  product  Products   @relation(fields: [productId], references: [id])
+  purchase Purchases? @relation(fields: [purchaseId], references: [id], onDelete: Cascade)
+  return   Returns?   @relation(fields: [returnId], references: [id], onDelete: Cascade)
+
+  @@map("recepcion_items")
+}
+
+model ProjectDocuments {
+  id          String   @id @default(cuid())
+  projectId   String   @map("project_id")
+  fileName    String   @map("file_name")
+  fileUrl     String   @map("file_url")
+  fileSize    Int      @default(0) @map("file_size")
+  fileType    String   @default("") @map("file_type")
+  category    String   @default("other") @map("category")
+  uploadedAt  DateTime @default(now()) @map("uploaded_at")
+
+  project Projects @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@map("project_documents")
+}
+
+model Tasks {
+  id            String   @id @default(cuid())
+  title         String
+  description   String   @default("")
+  dueDate       String?  @map("due_date")
+  alarmDate     String?  @map("alarm_date")
+  completedAt   String?  @map("completed_at")
+  projectId     String?  @map("project_id")
+  status        String   @default("pending")
+  createdAt     DateTime @default(now()) @map("created_at")
+  automationKey String?  @map("automation_key")
+  autoGenerated Boolean  @default(false) @map("auto_generated")
+  priority      Int      @default(2)
+
+  project Projects? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@map("tasks")
+}
+
+model ExpenseCategories {
+  id        String   @id @default(cuid())
+  name      String
+  color     String   @default("slate")
+  createdAt DateTime @default(now()) @map("created_at")
+
+  expenses ProjectExpenses[]
+
+  @@map("expense_categories")
+}
+
+model ProjectExpenses {
+  id          String   @id @default(cuid())
+  projectId   String   @map("project_id")
+  categoryId  String?  @map("category_id")
+  description String   @default("")
+  amount      Float    @default(0)
+  expenseDate String   @default("") @map("expense_date")
+  notes       String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  project  Projects           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  category ExpenseCategories? @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+
+  @@map("project_expenses")
+}

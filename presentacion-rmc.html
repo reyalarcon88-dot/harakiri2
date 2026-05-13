@@ -1,0 +1,905 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Sistema HARAKIRI — RMC</title>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg:       #F4F7FF;
+    --white:    #FFFFFF;
+    --navy:     #1E2D4E;
+    --navy2:    #2D3F6B;
+    --text:     #334155;
+    --muted:    #7C8FAC;
+    --border:   #DDE4F0;
+
+    --blue:     #4E7FE8;
+    --blue-bg:  #EBF1FD;
+    --blue-b:   #C3D6F9;
+
+    --teal:     #2BBFA4;
+    --teal-bg:  #E6F9F5;
+    --teal-b:   #A7E9DF;
+
+    --amber:    #F59E0B;
+    --amber-bg: #FEF7E6;
+    --amber-b:  #FDDFA0;
+
+    --purple:   #8B5CF6;
+    --purple-bg:#F3EFFE;
+    --purple-b: #D8C5FB;
+
+    --rose:     #F43F5E;
+    --rose-bg:  #FEE8ED;
+    --rose-b:   #FBCCD6;
+
+    --green:    #10B981;
+    --green-bg: #E6FAF3;
+    --green-b:  #A3E9CE;
+  }
+
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    font-family: 'Inter', sans-serif;
+    background: var(--bg);
+    color: var(--text);
+    overflow: hidden;
+    width: 100vw;
+    height: 100vh;
+  }
+
+  /* ── SLIDES ── */
+  #deck { width: 100%; height: 100%; position: relative; }
+
+  .slide {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    padding: 52px 72px;
+    opacity: 0;
+    transform: translateX(56px);
+    transition: opacity .4s ease, transform .4s ease;
+    pointer-events: none;
+    background: var(--bg);
+  }
+  .slide.active  { opacity: 1; transform: translateX(0); pointer-events: all; }
+  .slide.exit    { opacity: 0; transform: translateX(-56px); }
+
+  /* ── PROGRESS ── */
+  #progress-bar {
+    position: fixed; bottom: 0; left: 0;
+    height: 3px; background: var(--blue);
+    transition: width .4s ease; z-index: 100;
+  }
+  #counter {
+    position: fixed; bottom: 16px; right: 26px;
+    font-size: 11px; color: var(--muted);
+    letter-spacing: 1px; z-index: 100;
+  }
+  .nav-btn {
+    position: fixed; bottom: 6px;
+    background: var(--white); border: 1px solid var(--border);
+    color: var(--muted);
+    width: 36px; height: 36px; border-radius: 50%;
+    cursor: pointer; font-size: 16px;
+    display: flex; align-items: center; justify-content: center;
+    transition: all .2s; z-index: 100; box-shadow: 0 1px 4px rgba(0,0,0,.08);
+  }
+  .nav-btn:hover { background: var(--blue-bg); color: var(--blue); border-color: var(--blue-b); }
+  #btn-prev { right: 86px; }
+  #btn-next { right: 42px; }
+  #hint {
+    position: fixed; bottom: 48px; left: 50%; transform: translateX(-50%);
+    font-size: 11px; color: var(--muted); letter-spacing: .5px; z-index: 100;
+  }
+
+  /* ── SHARED ── */
+  .slide-label {
+    font-size: 10px; font-weight: 700;
+    letter-spacing: 3px; text-transform: uppercase;
+    color: var(--blue); margin-bottom: 8px;
+  }
+  .slide-title {
+    font-size: 38px; font-weight: 800;
+    letter-spacing: -1px; line-height: 1.1;
+    color: var(--navy); margin-bottom: 28px;
+  }
+  .slide-title em { font-style: normal; color: var(--blue); }
+  .slide-header { width: 100%; }
+
+  /* ══════════════════════════════════
+     SLIDE 1 — PORTADA
+  ══════════════════════════════════ */
+  .slide-cover {
+    background: linear-gradient(145deg, #EBF1FD 0%, #F4F7FF 50%, #E8F9F5 100%);
+    text-align: center; gap: 0; position: relative; overflow: hidden;
+  }
+  .cover-blob {
+    position: absolute; border-radius: 50%; pointer-events: none;
+  }
+  .cover-tag {
+    font-size: 11px; font-weight: 700;
+    letter-spacing: 3px; text-transform: uppercase;
+    color: var(--blue); margin-bottom: 24px;
+  }
+  .cover-logo {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 72px; height: 72px; border-radius: 20px;
+    background: linear-gradient(135deg, var(--blue), var(--purple));
+    font-size: 32px; margin-bottom: 24px;
+    box-shadow: 0 8px 24px rgba(78,127,232,.3);
+  }
+  .cover-title {
+    font-size: 64px; font-weight: 900;
+    letter-spacing: -2px; line-height: 1;
+    color: var(--navy); margin-bottom: 12px;
+  }
+  .cover-title span { color: var(--blue); }
+  .cover-subtitle {
+    font-size: 18px; font-weight: 400;
+    color: var(--muted); margin-bottom: 40px;
+    max-width: 520px;
+  }
+  .cover-divider { width: 56px; height: 3px; background: var(--blue); margin: 0 auto 36px; border-radius: 2px; }
+  .cover-meta { display: flex; gap: 40px; justify-content: center; }
+  .cover-meta-item { font-size: 12px; color: var(--muted); }
+  .cover-meta-item strong {
+    display: block; font-size: 14px; font-weight: 700;
+    color: var(--navy); margin-bottom: 2px;
+  }
+
+  /* ══════════════════════════════════
+     SLIDE 2 — PROBLEMA
+  ══════════════════════════════════ */
+  .slide-problem { align-items: flex-start; }
+  .pain-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; width: 100%; }
+  .pain-card {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px 18px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.04);
+  }
+  .pain-icon { font-size: 26px; margin-bottom: 10px; }
+  .pain-card h3 { font-size: 14px; font-weight: 700; color: var(--navy); margin-bottom: 6px; }
+  .pain-card p  { font-size: 12px; color: var(--muted); line-height: 1.6; }
+
+  /* ══════════════════════════════════
+     SLIDE 3 — QUÉ ES
+  ══════════════════════════════════ */
+  .slide-what { align-items: flex-start; }
+  .what-body {
+    display: grid; grid-template-columns: 1fr 1fr;
+    gap: 40px; width: 100%; align-items: center;
+  }
+  .what-text p {
+    font-size: 15px; line-height: 1.8;
+    color: var(--text); margin-bottom: 16px;
+  }
+  .what-text p strong { color: var(--navy); font-weight: 700; }
+  .highlight-box {
+    background: var(--blue-bg); border-left: 4px solid var(--blue);
+    border-radius: 0 10px 10px 0; padding: 16px 18px;
+    font-size: 14px; color: var(--navy2); line-height: 1.7; font-style: italic;
+  }
+  .pill-list { display: flex; flex-direction: column; gap: 10px; }
+  .pill {
+    display: flex; align-items: center; gap: 12px;
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  }
+  .pill-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--blue); flex-shrink: 0; }
+  .pill span { font-size: 13px; font-weight: 500; color: var(--text); }
+
+  /* ══════════════════════════════════
+     SLIDE 4 — MÓDULOS
+  ══════════════════════════════════ */
+  .slide-modules { align-items: flex-start; }
+  .modules-grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 12px; width: 100%; }
+  .module-card {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 12px; padding: 16px 14px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+    transition: border-color .2s, box-shadow .2s;
+  }
+  .module-card:hover { border-color: var(--blue-b); box-shadow: 0 4px 14px rgba(78,127,232,.1); }
+  .module-num { font-size: 9px; font-weight: 700; letter-spacing: 2px; color: var(--blue); margin-bottom: 8px; }
+  .module-icon { font-size: 20px; margin-bottom: 6px; }
+  .module-card h3 { font-size: 12px; font-weight: 700; color: var(--navy); margin-bottom: 3px; }
+  .module-card p  { font-size: 10.5px; color: var(--muted); line-height: 1.5; }
+  .module-card.special { background: var(--amber-bg); border-color: var(--amber-b); }
+  .module-card.special .module-num { color: var(--amber); }
+
+  /* ══════════════════════════════════
+     SLIDE 5 — ALMACENES
+  ══════════════════════════════════ */
+  .slide-warehouse { align-items: flex-start; }
+  .feature-body { display: grid; grid-template-columns: 1.1fr 1fr; gap: 40px; width: 100%; align-items: start; }
+  .feature-list { display: flex; flex-direction: column; gap: 12px; }
+  .feature-item { display: flex; gap: 14px; align-items: flex-start; }
+  .feature-item-icon {
+    width: 38px; height: 38px; border-radius: 10px;
+    background: var(--blue-bg); border: 1px solid var(--blue-b);
+    display: flex; align-items: center; justify-content: center;
+    font-size: 17px; flex-shrink: 0;
+  }
+  .feature-item-text h4 { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 2px; }
+  .feature-item-text p  { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .hierarchy-box {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 14px; padding: 22px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.04);
+  }
+  .hierarchy-box h4 {
+    font-size: 10px; font-weight: 700; letter-spacing: 2.5px;
+    text-transform: uppercase; color: var(--blue); margin-bottom: 18px;
+  }
+  .hier-item { display: flex; align-items: center; gap: 10px; padding: 9px 0; }
+  .hier-item + .hier-item { border-top: 1px solid var(--border); margin-left: 16px; }
+  .hier-dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+  .hier-item span { font-size: 13px; color: var(--text); }
+  .hier-item em { font-style: normal; font-size: 10px; color: var(--muted); margin-left: auto; }
+
+  /* ══════════════════════════════════
+     SLIDE 6 — COMPRAS
+  ══════════════════════════════════ */
+  .slide-purchases { align-items: flex-start; }
+  .flow-row { display: flex; align-items: center; width: 100%; margin-bottom: 24px; }
+  .flow-step {
+    flex: 1; text-align: center; padding: 14px 10px;
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  }
+  .flow-step .f-icon { font-size: 20px; margin-bottom: 5px; }
+  .flow-step h4 { font-size: 11px; font-weight: 700; color: var(--navy); margin-bottom: 1px; }
+  .flow-step p  { font-size: 9.5px; color: var(--muted); }
+  .flow-arrow { color: var(--blue); font-size: 18px; padding: 0 6px; flex-shrink: 0; }
+  .purchases-detail { display: grid; grid-template-columns: repeat(3,1fr); gap: 14px; width: 100%; }
+  .detail-card {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 12px; padding: 18px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  }
+  .detail-card .d-label {
+    font-size: 9.5px; font-weight: 700; letter-spacing: 2px;
+    text-transform: uppercase; color: var(--blue); margin-bottom: 10px;
+  }
+  .detail-card ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .detail-card ul li { font-size: 12px; color: var(--text); display: flex; align-items: center; gap: 8px; }
+  .detail-card ul li::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--blue); flex-shrink: 0; }
+
+  /* ══════════════════════════════════
+     SLIDE 7 — PROYECTOS
+  ══════════════════════════════════ */
+  .slide-projects { align-items: flex-start; }
+  .projects-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; width: 100%; }
+  .proj-card {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  }
+  .proj-card h3 {
+    font-size: 13px; font-weight: 700; color: var(--navy);
+    margin-bottom: 10px; display: flex; align-items: center; gap: 8px;
+  }
+  .proj-card ul { list-style: none; display: flex; flex-direction: column; gap: 6px; }
+  .proj-card ul li { font-size: 12px; color: var(--text); display: flex; align-items: center; gap: 8px; line-height: 1.5; }
+  .proj-card ul li::before { content: '✓'; font-size: 10px; color: var(--green); font-weight: 700; flex-shrink: 0; }
+
+  /* ══════════════════════════════════
+     SLIDE 8 — REPORTES
+  ══════════════════════════════════ */
+  .slide-reports { align-items: flex-start; }
+  .reports-body { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; width: 100%; align-items: start; }
+  .report-card {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 14px; padding: 20px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+    display: flex; flex-direction: column; gap: 7px;
+  }
+  .report-card .r-icon { font-size: 26px; }
+  .report-card h3 { font-size: 14px; font-weight: 700; color: var(--navy); }
+  .report-card p  { font-size: 12px; color: var(--muted); line-height: 1.6; }
+  .export-badge {
+    display: inline-flex; align-items: center; gap: 5px;
+    background: var(--green-bg); border: 1px solid var(--green-b);
+    color: var(--green); font-size: 10px; font-weight: 700;
+    padding: 3px 10px; border-radius: 20px; margin-top: 2px; width: fit-content;
+  }
+
+  /* ══════════════════════════════════
+     SLIDE 9 — BENEFICIOS
+  ══════════════════════════════════ */
+  .slide-benefits { align-items: flex-start; }
+  .benefits-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 16px; width: 100%; }
+  .benefit-card { border-radius: 14px; padding: 22px 18px; }
+  .bc-blue   { background: var(--blue-bg);   border: 1px solid var(--blue-b); }
+  .bc-green  { background: var(--teal-bg);   border: 1px solid var(--teal-b); }
+  .bc-yellow { background: var(--amber-bg);  border: 1px solid var(--amber-b); }
+  .bc-purple { background: var(--purple-bg); border: 1px solid var(--purple-b); }
+  .bc-red    { background: var(--rose-bg);   border: 1px solid var(--rose-b); }
+  .bc-teal   { background: var(--green-bg);  border: 1px solid var(--green-b); }
+  .benefit-card .b-num {
+    font-size: 34px; font-weight: 900; line-height: 1; margin-bottom: 5px;
+  }
+  .bc-blue   .b-num { color: var(--blue); }
+  .bc-green  .b-num { color: var(--teal); }
+  .bc-yellow .b-num { color: var(--amber); }
+  .bc-purple .b-num { color: var(--purple); }
+  .bc-red    .b-num { color: var(--rose); }
+  .bc-teal   .b-num { color: var(--green); }
+  .benefit-card h3 { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 5px; }
+  .benefit-card p  { font-size: 11.5px; color: var(--text); line-height: 1.6; }
+
+  /* ══════════════════════════════════
+     SLIDE 10 — TECNOLOGÍA
+  ══════════════════════════════════ */
+  .slide-tech { align-items: flex-start; }
+  .tech-body { display: grid; grid-template-columns: 1fr 1.1fr; gap: 40px; width: 100%; align-items: start; }
+  .tech-stack { display: flex; flex-direction: column; gap: 10px; }
+  .tech-row {
+    display: flex; align-items: center; gap: 12px; padding: 11px 14px;
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,.04);
+  }
+  .tech-row .t-icon { font-size: 18px; width: 24px; text-align: center; }
+  .tech-row .t-info { flex: 1; }
+  .tech-row .t-info span { font-size: 13px; font-weight: 600; color: var(--navy); display: block; }
+  .tech-row .t-info small { font-size: 10.5px; color: var(--muted); }
+  .tech-row .t-badge {
+    font-size: 9.5px; font-weight: 700; padding: 3px 8px; border-radius: 20px;
+    background: var(--blue-bg); color: var(--blue); border: 1px solid var(--blue-b);
+  }
+  .arch-diagram {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 14px; padding: 22px;
+    box-shadow: 0 2px 8px rgba(0,0,0,.04);
+  }
+  .arch-diagram h4 {
+    font-size: 10px; font-weight: 700; letter-spacing: 2.5px;
+    text-transform: uppercase; color: var(--blue); margin-bottom: 18px;
+  }
+  .arch-layer {
+    background: var(--blue-bg); border: 1px solid var(--blue-b);
+    border-radius: 8px; padding: 10px 14px; margin-bottom: 5px;
+    font-size: 12px; color: var(--navy); text-align: center;
+  }
+  .arch-layer .a-label {
+    font-size: 9px; font-weight: 700; letter-spacing: 1.5px;
+    text-transform: uppercase; color: var(--muted); display: block; margin-bottom: 2px;
+  }
+  .arch-arrow-down { text-align: center; color: var(--border); font-size: 14px; margin: 2px 0; }
+
+  /* ══════════════════════════════════
+     SLIDE 11 — ROADMAP
+  ══════════════════════════════════ */
+  .slide-roadmap { align-items: flex-start; }
+  .roadmap-body { width: 100%; display: flex; flex-direction: column; gap: 0; position: relative; }
+  .roadmap-body::before {
+    content: ''; position: absolute; left: 106px;
+    top: 20px; bottom: 20px; width: 2px; background: var(--border);
+  }
+  .rm-row { display: flex; align-items: flex-start; gap: 22px; padding: 12px 0; }
+  .rm-phase { width: 78px; text-align: right; flex-shrink: 0; padding-top: 4px; }
+  .rm-phase .ph-label { font-size: 9px; font-weight: 700; letter-spacing: 1.5px; text-transform: uppercase; color: var(--muted); display: block; }
+  .rm-phase .ph-date  { font-size: 13px; font-weight: 700; color: var(--navy); }
+  .rm-dot-wrap { width: 58px; display: flex; justify-content: center; align-items: center; flex-shrink: 0; padding-top: 8px; }
+  .rm-dot { width: 14px; height: 14px; border-radius: 50%; border: 2px solid var(--border); background: var(--bg); position: relative; z-index: 1; }
+  .rm-dot.done   { background: var(--green); border-color: var(--green); }
+  .rm-dot.active { background: var(--blue); border-color: var(--blue); box-shadow: 0 0 0 4px var(--blue-bg); }
+  .rm-content {
+    flex: 1; background: var(--white); border: 1px solid var(--border);
+    border-radius: 10px; padding: 12px 16px;
+    box-shadow: 0 1px 4px rgba(0,0,0,.04);
+  }
+  .rm-content h4 { font-size: 13px; font-weight: 700; color: var(--navy); margin-bottom: 3px; }
+  .rm-content p  { font-size: 11.5px; color: var(--muted); line-height: 1.5; }
+  .rm-badge {
+    font-size: 9px; font-weight: 700; padding: 2px 7px;
+    border-radius: 20px; margin-left: 8px; vertical-align: middle;
+  }
+  .badge-done   { background: var(--green-bg);  color: var(--green);  border: 1px solid var(--green-b); }
+  .badge-active { background: var(--blue-bg);   color: var(--blue);   border: 1px solid var(--blue-b); }
+  .badge-next   { background: var(--amber-bg);  color: var(--amber);  border: 1px solid var(--amber-b); }
+
+  /* ══════════════════════════════════
+     SLIDE 12 — CIERRE
+  ══════════════════════════════════ */
+  .slide-close {
+    background: linear-gradient(145deg, #EBF1FD 0%, #F4F7FF 50%, #E8F9F5 100%);
+    text-align: center; overflow: hidden; position: relative;
+  }
+  .close-logo {
+    width: 64px; height: 64px; border-radius: 18px;
+    background: linear-gradient(135deg, var(--blue), var(--purple));
+    display: flex; align-items: center; justify-content: center;
+    font-size: 28px; margin: 0 auto 20px;
+    box-shadow: 0 8px 24px rgba(78,127,232,.25);
+  }
+  .close-title {
+    font-size: 48px; font-weight: 900;
+    letter-spacing: -1.5px; color: var(--navy); margin-bottom: 10px;
+  }
+  .close-title span { color: var(--blue); }
+  .close-sub {
+    font-size: 17px; font-weight: 400; color: var(--muted);
+    margin-bottom: 36px; max-width: 480px;
+  }
+  .close-divider { width: 48px; height: 3px; background: var(--blue); margin: 0 auto 32px; border-radius: 2px; }
+  .close-pills { display: flex; gap: 14px; justify-content: center; flex-wrap: wrap; }
+  .close-pill {
+    background: var(--white); border: 1px solid var(--border);
+    border-radius: 30px; padding: 9px 20px;
+    font-size: 13px; font-weight: 500; color: var(--text);
+    box-shadow: 0 1px 4px rgba(0,0,0,.06);
+  }
+  .close-pill span { color: var(--blue); font-weight: 700; }
+
+  /* ── PRINT ── */
+  @media print {
+    body { overflow: visible; background: white; }
+    #deck { height: auto; }
+    .slide {
+      position: relative; opacity: 1 !important; transform: none !important;
+      page-break-after: always; height: 100vh; min-height: 100vh;
+    }
+    #progress-bar, #counter, .nav-btn, #hint { display: none; }
+    * { -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+  }
+</style>
+</head>
+<body>
+<div id="deck">
+
+  <!-- ─────────────── SLIDE 1: PORTADA ─────────────── -->
+  <section class="slide slide-cover active" data-index="0">
+    <div class="cover-blob" style="width:420px;height:420px;background:rgba(78,127,232,.07);top:-120px;right:-100px;"></div>
+    <div class="cover-blob" style="width:280px;height:280px;background:rgba(43,191,164,.07);bottom:-80px;left:-60px;"></div>
+    <div class="cover-tag">Presentación Ejecutiva · 2026</div>
+    <div class="cover-logo">⚡</div>
+    <div class="cover-title">Sistema <span>HARAKIRI</span></div>
+    <div class="cover-subtitle">Plataforma Integral de Gestión de Inventario, Compras y Proyectos</div>
+    <div class="cover-divider"></div>
+    <div class="cover-meta">
+      <div class="cover-meta-item"><strong>Empresa</strong>RMC</div>
+      <div class="cover-meta-item"><strong>Versión</strong>1.0 — MVP</div>
+      <div class="cover-meta-item"><strong>Año</strong>2026</div>
+      <div class="cover-meta-item"><strong>Estado</strong>En Desarrollo</div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 2: PROBLEMA ─────────────── -->
+  <section class="slide slide-problem" data-index="1">
+    <div class="slide-header">
+      <div class="slide-label">El Contexto</div>
+      <div class="slide-title">¿Qué problema <em>resolvemos?</em></div>
+    </div>
+    <div class="pain-grid">
+      <div class="pain-card">
+        <div class="pain-icon">📋</div>
+        <h3>Control manual de inventario</h3>
+        <p>Registros en hojas de cálculo desconectadas, propensos a errores y difíciles de auditar en tiempo real.</p>
+      </div>
+      <div class="pain-card">
+        <div class="pain-icon">🔗</div>
+        <h3>Operaciones desconectadas</h3>
+        <p>Compras, proyectos y bodega operan con sistemas separados. La información no fluye entre áreas.</p>
+      </div>
+      <div class="pain-card">
+        <div class="pain-icon">📊</div>
+        <h3>Sin visibilidad de datos</h3>
+        <p>No existe una fuente única para tomar decisiones informadas sobre stock, costos y avance de obras.</p>
+      </div>
+      <div class="pain-card">
+        <div class="pain-icon">🏗️</div>
+        <h3>Seguimiento de proyectos</h3>
+        <p>Dificultad para controlar materiales asignados a cada obra, los costos reales y el estado de despachos.</p>
+      </div>
+      <div class="pain-card">
+        <div class="pain-icon">🔄</div>
+        <h3>Devoluciones y transferencias</h3>
+        <p>Sin un proceso claro para devolver materiales no utilizados a bodega o moverlos entre ubicaciones.</p>
+      </div>
+      <div class="pain-card">
+        <div class="pain-icon">📄</div>
+        <h3>Documentación dispersa</h3>
+        <p>Facturas, contratos y archivos almacenados sin orden ni trazabilidad centralizada.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 3: QUÉ ES ─────────────── -->
+  <section class="slide slide-what" data-index="2">
+    <div class="slide-header">
+      <div class="slide-label">La Solución</div>
+      <div class="slide-title">¿Qué es <em>HARAKIRI?</em></div>
+    </div>
+    <div class="what-body">
+      <div class="what-text">
+        <p>HARAKIRI es una <strong>plataforma web integral</strong> diseñada a medida para RMC que unifica en un solo lugar todas las operaciones de inventario, compras y gestión de proyectos.</p>
+        <p>Permite a cada área de la empresa trabajar con <strong>información en tiempo real</strong>, trazabilidad completa de materiales y documentos, y reportes automáticos para la toma de decisiones.</p>
+        <div class="highlight-box">
+          "Una sola plataforma para todo el ciclo: desde la compra del material hasta su despacho en obra y devolución a bodega."
+        </div>
+      </div>
+      <div class="pill-list">
+        <div class="pill"><div class="pill-dot"></div><span>Acceso web desde cualquier dispositivo</span></div>
+        <div class="pill"><div class="pill-dot"></div><span>Trazabilidad completa de materiales y documentos</span></div>
+        <div class="pill"><div class="pill-dot"></div><span>Roles y permisos por usuario</span></div>
+        <div class="pill"><div class="pill-dot"></div><span>Generación automática de PDFs y reportes</span></div>
+        <div class="pill"><div class="pill-dot"></div><span>Exportación a Excel con un clic</span></div>
+        <div class="pill"><div class="pill-dot"></div><span>Diseño moderno, rápido y responsivo</span></div>
+        <div class="pill"><div class="pill-dot"></div><span>Base de datos confiable y respaldada localmente</span></div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 4: MÓDULOS ─────────────── -->
+  <section class="slide slide-modules" data-index="3">
+    <div class="slide-header">
+      <div class="slide-label">Arquitectura Funcional</div>
+      <div class="slide-title">Módulos del <em>sistema</em></div>
+    </div>
+    <div class="modules-grid">
+      <div class="module-card"><div class="module-num">01</div><div class="module-icon">📊</div><h3>Dashboard</h3><p>KPIs, alertas de stock y resumen ejecutivo en tiempo real</p></div>
+      <div class="module-card"><div class="module-num">02</div><div class="module-icon">🏭</div><h3>Almacenes</h3><p>Bodegas, racks, estantes y ubicaciones físicas de productos</p></div>
+      <div class="module-card"><div class="module-num">03</div><div class="module-icon">📦</div><h3>Productos</h3><p>Catálogo con familias, unidades, stock mínimo y costos</p></div>
+      <div class="module-card"><div class="module-num">04</div><div class="module-icon">🛒</div><h3>Compras</h3><p>Órdenes de compra, proveedores, documentos y seguimiento</p></div>
+      <div class="module-card"><div class="module-num">05</div><div class="module-icon">🏗️</div><h3>Proyectos</h3><p>Planificación, materiales, presupuestos y despachos a obra</p></div>
+      <div class="module-card"><div class="module-num">06</div><div class="module-icon">📥</div><h3>Recepción</h3><p>Ingreso de mercancía, verificación y ubicación en bodega</p></div>
+      <div class="module-card"><div class="module-num">07</div><div class="module-icon">🔄</div><h3>Transferencias</h3><p>Movimientos de stock entre ubicaciones con trazabilidad</p></div>
+      <div class="module-card"><div class="module-num">08</div><div class="module-icon">👥</div><h3>Personas</h3><p>Proveedores, clientes y contratistas en un solo registro</p></div>
+      <div class="module-card"><div class="module-num">09</div><div class="module-icon">📅</div><h3>Tareas</h3><p>Calendario de actividades y seguimiento por equipo</p></div>
+      <div class="module-card"><div class="module-num">10</div><div class="module-icon">📈</div><h3>Reportes</h3><p>Análisis de inventario y compras exportables a PDF/Excel</p></div>
+      <div class="module-card"><div class="module-num">11</div><div class="module-icon">⚙️</div><h3>Configuración</h3><p>Parámetros, usuarios, roles y datos maestros del sistema</p></div>
+      <div class="module-card special"><div class="module-num">+</div><div class="module-icon">🚀</div><h3>Expansible</h3><p>Arquitectura modular lista para nuevas funcionalidades</p></div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 5: ALMACENES ─────────────── -->
+  <section class="slide slide-warehouse" data-index="4">
+    <div class="slide-header">
+      <div class="slide-label">Módulo 02</div>
+      <div class="slide-title">Gestión de <em>Almacenes</em> e Inventario</div>
+    </div>
+    <div class="feature-body">
+      <div class="feature-list">
+        <div class="feature-item">
+          <div class="feature-item-icon">🗺️</div>
+          <div class="feature-item-text"><h4>Mapa de Bodega Digital</h4><p>Visualización de la distribución física con racks y estantes identificados</p></div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-item-icon">📍</div>
+          <div class="feature-item-text"><h4>Ubicación Exacta de Productos</h4><p>Cada producto tiene su posición precisa: Bodega → Rack → Estante → Cantidad</p></div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-item-icon">⚠️</div>
+          <div class="feature-item-text"><h4>Alertas de Stock Mínimo</h4><p>Notificaciones automáticas cuando el inventario cae bajo el nivel configurado</p></div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-item-icon">🔄</div>
+          <div class="feature-item-text"><h4>Control de Movimientos</h4><p>Historial completo de ingresos, egresos y transferencias con fecha y responsable</p></div>
+        </div>
+        <div class="feature-item">
+          <div class="feature-item-icon">🏢</div>
+          <div class="feature-item-text"><h4>Multi-Bodega</h4><p>Soporte para múltiples almacenes con gestión independiente por ubicación</p></div>
+        </div>
+      </div>
+      <div class="hierarchy-box">
+        <h4>Jerarquía de Inventario</h4>
+        <div class="hier-item"><div class="hier-dot" style="background:#4E7FE8;width:11px;height:11px;"></div><span>🏭 <strong>Almacén</strong></span><em>nivel 1</em></div>
+        <div class="hier-item"><div class="hier-dot" style="background:#8B5CF6;"></div><span>🗄️ <strong>Rack</strong></span><em>nivel 2</em></div>
+        <div class="hier-item"><div class="hier-dot" style="background:#2BBFA4;"></div><span>📂 <strong>Estante</strong></span><em>nivel 3</em></div>
+        <div class="hier-item"><div class="hier-dot" style="background:#F59E0B;"></div><span>📦 <strong>Producto + Stock</strong></span><em>nivel 4</em></div>
+        <br>
+        <div style="font-size:11.5px;color:var(--muted);line-height:1.7;">Esta estructura permite localizar cualquier producto al instante y mantener un inventario preciso por ubicación física.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 6: COMPRAS ─────────────── -->
+  <section class="slide slide-purchases" data-index="5">
+    <div class="slide-header">
+      <div class="slide-label">Módulo 04</div>
+      <div class="slide-title">Gestión de <em>Compras</em></div>
+    </div>
+    <div class="flow-row">
+      <div class="flow-step"><div class="f-icon">📝</div><h4>Solicitud</h4><p>Requerimiento de materiales</p></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="f-icon">✅</div><h4>Aprobación</h4><p>Validación y presupuesto</p></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="f-icon">🛒</div><h4>Orden de Compra</h4><p>Emisión al proveedor</p></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="f-icon">📥</div><h4>Recepción</h4><p>Ingreso a bodega</p></div>
+      <div class="flow-arrow">→</div>
+      <div class="flow-step"><div class="f-icon">📊</div><h4>Stock Actualizado</h4><p>Inventario en tiempo real</p></div>
+    </div>
+    <div class="purchases-detail">
+      <div class="detail-card">
+        <div class="d-label">Gestión de Proveedores</div>
+        <ul>
+          <li>Registro centralizado de proveedores</li>
+          <li>Historial de compras por proveedor</li>
+          <li>Comparativo de precios</li>
+          <li>Datos de contacto y condiciones</li>
+        </ul>
+      </div>
+      <div class="detail-card">
+        <div class="d-label">Control de Órdenes</div>
+        <ul>
+          <li>Estados: Borrador / Enviado / Recibido</li>
+          <li>Adjunto de facturas y documentos</li>
+          <li>Generación de PDF automático</li>
+          <li>Búsqueda avanzada por filtros</li>
+        </ul>
+      </div>
+      <div class="detail-card">
+        <div class="d-label">Trazabilidad</div>
+        <ul>
+          <li>Cada compra ligada a un proyecto</li>
+          <li>Seguimiento ítem por ítem</li>
+          <li>Historial de cambios auditado</li>
+          <li>Alertas de entrega pendiente</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 7: PROYECTOS ─────────────── -->
+  <section class="slide slide-projects" data-index="6">
+    <div class="slide-header">
+      <div class="slide-label">Módulo 05</div>
+      <div class="slide-title">Gestión de <em>Proyectos</em> y Obras</div>
+    </div>
+    <div class="projects-grid">
+      <div class="proj-card">
+        <h3>📋 Planificación de Materiales</h3>
+        <ul>
+          <li>Lista de materiales requeridos por proyecto</li>
+          <li>Vinculación directa con el inventario disponible</li>
+          <li>Control de lo solicitado vs. lo despachado</li>
+          <li>Alertas de materiales faltantes</li>
+          <li>Presupuesto estimado vs. costo real</li>
+        </ul>
+      </div>
+      <div class="proj-card">
+        <h3>🚚 Despacho a Obra</h3>
+        <ul>
+          <li>Registro de salida de materiales desde bodega</li>
+          <li>Barra de progreso de materiales enviados</li>
+          <li>Documentos de despacho en PDF automático</li>
+          <li>Trazabilidad del material en campo</li>
+          <li>Actualización automática del stock</li>
+        </ul>
+      </div>
+      <div class="proj-card">
+        <h3>🔙 Devoluciones</h3>
+        <ul>
+          <li>Proceso formal de retorno de materiales sobrantes</li>
+          <li>Reintegro automático al inventario de bodega</li>
+          <li>Historial de devoluciones por proyecto</li>
+          <li>Ajuste de costos e indicadores del proyecto</li>
+        </ul>
+      </div>
+      <div class="proj-card">
+        <h3>📁 Documentación</h3>
+        <ul>
+          <li>Adjunto de planos, contratos y permisos</li>
+          <li>Solicitudes de materiales generadas en PDF</li>
+          <li>Historial de documentos por proyecto</li>
+          <li>Acceso rápido a todos los archivos</li>
+        </ul>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 8: REPORTES ─────────────── -->
+  <section class="slide slide-reports" data-index="7">
+    <div class="slide-header">
+      <div class="slide-label">Módulo 10</div>
+      <div class="slide-title">Reportes y <em>Análisis de Datos</em></div>
+    </div>
+    <div class="reports-body">
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="report-card">
+          <div class="r-icon">📦</div>
+          <h3>Reporte de Inventario</h3>
+          <p>Valorización del stock por bodega, productos bajo mínimo, rotación de materiales y análisis por categoría.</p>
+          <div class="export-badge">✓ Exportable PDF · Excel</div>
+        </div>
+        <div class="report-card">
+          <div class="r-icon">🛒</div>
+          <h3>Reporte de Compras</h3>
+          <p>Resumen por proveedor, evolución de gastos mensual, comparativo de precios y estado de órdenes activas.</p>
+          <div class="export-badge">✓ Exportable PDF · Excel</div>
+        </div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="report-card">
+          <div class="r-icon">🏗️</div>
+          <h3>Reporte de Proyectos</h3>
+          <p>Avance de despacho por proyecto, presupuesto ejecutado vs. planificado y materiales pendientes de envío.</p>
+          <div class="export-badge">✓ Exportable PDF · Excel</div>
+        </div>
+        <div class="report-card">
+          <div class="r-icon">📊</div>
+          <h3>Dashboard Ejecutivo</h3>
+          <p>KPIs en tiempo real: valor del inventario, órdenes activas, proyectos en curso y alertas operacionales.</p>
+          <div class="export-badge">✓ Vista en pantalla · PDF</div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 9: BENEFICIOS ─────────────── -->
+  <section class="slide slide-benefits" data-index="8">
+    <div class="slide-header">
+      <div class="slide-label">Valor para el Negocio</div>
+      <div class="slide-title">Beneficios <em>concretos</em> para RMC</div>
+    </div>
+    <div class="benefits-grid">
+      <div class="benefit-card bc-blue">
+        <div class="b-num">−80%</div>
+        <h3>Tiempo en Control de Stock</h3>
+        <p>Elimina la gestión manual en planillas y centraliza toda la información en un solo sistema.</p>
+      </div>
+      <div class="benefit-card bc-green">
+        <div class="b-num">100%</div>
+        <h3>Trazabilidad de Materiales</h3>
+        <p>Desde la compra hasta el despacho, cada movimiento queda registrado con fecha y responsable.</p>
+      </div>
+      <div class="benefit-card bc-yellow">
+        <div class="b-num">0</div>
+        <h3>Pérdidas por Descontrol</h3>
+        <p>Alertas de stock mínimo y trazabilidad de materiales eliminan pérdidas por extravío o desorden.</p>
+      </div>
+      <div class="benefit-card bc-purple">
+        <div class="b-num">+</div>
+        <h3>Decisiones Informadas</h3>
+        <p>Reportes automáticos con datos reales permiten planificar compras y proyectos con mayor precisión.</p>
+      </div>
+      <div class="benefit-card bc-teal">
+        <div class="b-num">1</div>
+        <h3>Plataforma Unificada</h3>
+        <p>Bodega, compras y proyectos en un solo lugar. Sin correos, WhatsApp ni archivos sueltos.</p>
+      </div>
+      <div class="benefit-card bc-red">
+        <div class="b-num">∞</div>
+        <h3>Escalabilidad</h3>
+        <p>Arquitectura modular que crece con la empresa: nuevas bodegas, usuarios y funcionalidades.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 10: TECNOLOGÍA ─────────────── -->
+  <section class="slide slide-tech" data-index="9">
+    <div class="slide-header">
+      <div class="slide-label">Infraestructura</div>
+      <div class="slide-title">Tecnología <em>moderna</em> y confiable</div>
+    </div>
+    <div class="tech-body">
+      <div class="tech-stack">
+        <div class="tech-row"><div class="t-icon">⚛️</div><div class="t-info"><span>Next.js 16 + React 19</span><small>Framework web de última generación</small></div><div class="t-badge">Frontend</div></div>
+        <div class="tech-row"><div class="t-icon">🗄️</div><div class="t-info"><span>Prisma ORM + SQLite</span><small>Base de datos robusta y portátil</small></div><div class="t-badge">Backend</div></div>
+        <div class="tech-row"><div class="t-icon">🎨</div><div class="t-info"><span>Tailwind CSS + shadcn/ui</span><small>Interfaz moderna y accesible</small></div><div class="t-badge">UI</div></div>
+        <div class="tech-row"><div class="t-icon">⚡</div><div class="t-info"><span>Bun Runtime</span><small>Servidor ultra-rápido de JavaScript</small></div><div class="t-badge">Runtime</div></div>
+        <div class="tech-row"><div class="t-icon">📄</div><div class="t-info"><span>React PDF + xlsx</span><small>Generación de documentos y reportes</small></div><div class="t-badge">Docs</div></div>
+        <div class="tech-row"><div class="t-icon">🔒</div><div class="t-info"><span>NextAuth + TypeScript</span><small>Autenticación segura y código tipado</small></div><div class="t-badge">Seguridad</div></div>
+      </div>
+      <div class="arch-diagram">
+        <h4>Arquitectura de la Aplicación</h4>
+        <div class="arch-layer"><span class="a-label">Capa de Presentación</span>Interfaz Web (Browser / Desktop)</div>
+        <div class="arch-arrow-down">↓</div>
+        <div class="arch-layer"><span class="a-label">Capa de Aplicación</span>Next.js — Páginas + API Routes</div>
+        <div class="arch-arrow-down">↓</div>
+        <div class="arch-layer"><span class="a-label">Capa de Negocio</span>Servicios · Validaciones (Zod) · Lógica</div>
+        <div class="arch-arrow-down">↓</div>
+        <div class="arch-layer"><span class="a-label">Capa de Datos</span>Prisma ORM → SQLite Database</div>
+        <br>
+        <div style="font-size:11px;color:var(--muted);line-height:1.7;text-align:center;">Arquitectura monolítica modular.<br>Fácil de desplegar en servidor local o en la nube.</div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 11: ROADMAP ─────────────── -->
+  <section class="slide slide-roadmap" data-index="10">
+    <div class="slide-header">
+      <div class="slide-label">Hoja de Ruta</div>
+      <div class="slide-title">Plan de <em>Implementación</em></div>
+    </div>
+    <div class="roadmap-body">
+      <div class="rm-row">
+        <div class="rm-phase"><span class="ph-label">Fase</span><span class="ph-date">Q1 · 2026</span></div>
+        <div class="rm-dot-wrap"><div class="rm-dot done"></div></div>
+        <div class="rm-content">
+          <h4>Desarrollo del MVP <span class="rm-badge badge-done">COMPLETADO</span></h4>
+          <p>Módulos core: Dashboard, Almacenes, Productos, Compras, Proyectos y Reportes base. Diseño de base de datos y arquitectura.</p>
+        </div>
+      </div>
+      <div class="rm-row">
+        <div class="rm-phase"><span class="ph-label">Fase</span><span class="ph-date">Q2 · 2026</span></div>
+        <div class="rm-dot-wrap"><div class="rm-dot active"></div></div>
+        <div class="rm-content">
+          <h4>Refinamiento y Piloto <span class="rm-badge badge-active">EN CURSO</span></h4>
+          <p>Revisión con usuarios reales, ajuste de módulos de Recepción, Transferencias y generación de PDFs. Pruebas en entorno real.</p>
+        </div>
+      </div>
+      <div class="rm-row">
+        <div class="rm-phase"><span class="ph-label">Fase</span><span class="ph-date">Q3 · 2026</span></div>
+        <div class="rm-dot-wrap"><div class="rm-dot"></div></div>
+        <div class="rm-content">
+          <h4>Producción y Capacitación <span class="rm-badge badge-next">PRÓXIMO</span></h4>
+          <p>Despliegue en servidor de RMC, migración de datos históricos, capacitación al equipo y soporte inicial.</p>
+        </div>
+      </div>
+      <div class="rm-row">
+        <div class="rm-phase"><span class="ph-label">Fase</span><span class="ph-date">Q4 · 2026</span></div>
+        <div class="rm-dot-wrap"><div class="rm-dot"></div></div>
+        <div class="rm-content">
+          <h4>Expansión de Funcionalidades <span class="rm-badge badge-next">FUTURO</span></h4>
+          <p>Integraciones externas, app móvil para bodega, módulo de cotizaciones y analítica avanzada.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ─────────────── SLIDE 12: CIERRE ─────────────── -->
+  <section class="slide slide-close" data-index="11">
+    <div class="cover-blob" style="width:380px;height:380px;background:rgba(78,127,232,.07);top:-100px;right:-80px;"></div>
+    <div class="cover-blob" style="width:260px;height:260px;background:rgba(43,191,164,.07);bottom:-60px;left:-40px;"></div>
+    <div class="close-logo">⚡</div>
+    <div class="close-title">El futuro de <span>RMC</span></div>
+    <div class="close-sub">Un sistema hecho a medida para digitalizar operaciones, controlar el inventario y tomar mejores decisiones.</div>
+    <div class="close-divider"></div>
+    <div class="close-pills">
+      <div class="close-pill"><span>11</span> Módulos integrados</div>
+      <div class="close-pill"><span>100%</span> A medida para RMC</div>
+      <div class="close-pill"><span>Web</span> Acceso desde cualquier lugar</div>
+      <div class="close-pill"><span>Real-time</span> Datos en tiempo real</div>
+    </div>
+  </section>
+
+</div>
+
+<div id="progress-bar" style="width:8.33%"></div>
+<div id="counter">1 / 12</div>
+<button class="nav-btn" id="btn-prev">‹</button>
+<button class="nav-btn" id="btn-next">›</button>
+<div id="hint">← → para navegar &nbsp;·&nbsp; Ctrl+P para exportar PDF</div>
+
+<script>
+  const slides = document.querySelectorAll('.slide');
+  const total  = slides.length;
+  let current  = 0;
+
+  function goTo(n) {
+    if (n < 0 || n >= total) return;
+    slides[current].classList.remove('active');
+    slides[current].classList.add('exit');
+    setTimeout(() => slides[current].classList.remove('exit'), 420);
+    current = n;
+    slides[current].classList.add('active');
+    document.getElementById('progress-bar').style.width = ((current + 1) / total * 100) + '%';
+    document.getElementById('counter').textContent = (current + 1) + ' / ' + total;
+  }
+
+  document.getElementById('btn-next').addEventListener('click', () => goTo(current + 1));
+  document.getElementById('btn-prev').addEventListener('click', () => goTo(current - 1));
+
+  document.addEventListener('keydown', e => {
+    if (['ArrowRight','ArrowDown',' '].includes(e.key)) { e.preventDefault(); goTo(current + 1); }
+    if (['ArrowLeft','ArrowUp'].includes(e.key))        { e.preventDefault(); goTo(current - 1); }
+  });
+
+  setTimeout(() => {
+    const h = document.getElementById('hint');
+    if (h) { h.style.transition = 'opacity 1s'; h.style.opacity = '0'; }
+  }, 4000);
+</script>
+</body>
+</html>
