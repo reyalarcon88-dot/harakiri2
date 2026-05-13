@@ -11,6 +11,7 @@ import { LanguageToggle } from '@/components/layout/LanguageToggle'
 import { GlobalSearch } from '@/components/layout/GlobalSearch'
 import { PageHeader } from '@/components/layout/PageHeader'
 import { ThemeToggle } from '@/components/layout/ThemeToggle'
+import { LogoutButton } from '@/components/layout/LogoutButton'
 import { useNavigationStore } from '@/stores/navigation'
 import { DashboardModule } from '@/components/modules/dashboard/DashboardModule'
 import { WarehousesModule } from '@/components/modules/warehouses/WarehousesModule'
@@ -51,6 +52,7 @@ function AppContent() {
             <TaskAlarmBell />
             <LanguageToggle />
             <ThemeToggle />
+            <LogoutButton />
           </div>
         </header>
         <div className={`min-w-0 flex-1 ${currentPage === 'projects' ? 'p-3 md:p-4' : 'p-4 md:p-6'}`}>
