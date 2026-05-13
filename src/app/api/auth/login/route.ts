@@ -9,7 +9,7 @@ export async function POST(request: NextRequest) {
   const config = getAuthConfig()
   if (!config.configured) {
     return NextResponse.json(
-      { error: 'Autenticacion no configurada. Define RMC_AUTH_USER, RMC_AUTH_PASSWORD y RMC_AUTH_SECRET en .env.' },
+      { error: 'Authentication is not configured. Define RMC_AUTH_USER, RMC_AUTH_PASSWORD, and RMC_AUTH_SECRET in .env.' },
       { status: 503 }
     )
   }
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
   const password = String(body?.password ?? '')
 
   if (user !== config.user || password !== config.password) {
-    return NextResponse.json({ error: 'Usuario o contraseña incorrectos.' }, { status: 401 })
+    return NextResponse.json({ error: 'Invalid username or password.' }, { status: 401 })
   }
 
   const token = await createSessionToken(config.user, config.secret)

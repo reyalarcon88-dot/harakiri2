@@ -45,7 +45,7 @@ export async function proxy(request: NextRequest) {
 
   if (!config.configured || !hasSession) {
     if (pathname.startsWith('/api/')) {
-      return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     return NextResponse.redirect(loginUrl(request))

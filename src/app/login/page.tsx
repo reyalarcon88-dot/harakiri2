@@ -30,7 +30,7 @@ function LoginForm() {
       const payload = await response.json().catch(() => null)
 
       if (!response.ok) {
-        setError(payload?.error || 'No se pudo iniciar sesion.')
+        setError(payload?.error || 'Unable to sign in.')
         return
       }
 
@@ -51,9 +51,9 @@ function LoginForm() {
           <div>
             <CardTitle className="flex items-center justify-center gap-2 text-xl">
               <Lock className="h-5 w-5" />
-              Acceso al sistema
+              System access
             </CardTitle>
-            <CardDescription>Ingresa usuario y contraseña para continuar.</CardDescription>
+            <CardDescription>Enter your username and password to continue.</CardDescription>
           </div>
         </CardHeader>
         <CardContent>
@@ -66,7 +66,7 @@ function LoginForm() {
             ) : null}
 
             <div className="space-y-2">
-              <Label htmlFor="user">Usuario</Label>
+              <Label htmlFor="user">Username</Label>
               <Input
                 id="user"
                 autoComplete="username"
@@ -77,7 +77,7 @@ function LoginForm() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="password">Contraseña</Label>
+              <Label htmlFor="password">Password</Label>
               <Input
                 id="password"
                 type="password"
@@ -90,7 +90,7 @@ function LoginForm() {
 
             <Button type="submit" className="w-full" disabled={loading}>
               {loading ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Entrar
+              Sign in
             </Button>
           </form>
         </CardContent>
