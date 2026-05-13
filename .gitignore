@@ -63,9 +63,3 @@ tmp_*
 tmp-*.html
 *.tmp
 
-# Local app data and uploaded customer files
-/db/
-/prisma/db/
-/public/uploads/
-/outputs/
-/download/
