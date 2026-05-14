@@ -17,6 +17,22 @@ type UsageBucket = {
   projectIds: Set<string>
 }
 
+type RecentUsageProduct = {
+  productId: string
+  name: string
+  code: string
+  family: string
+  quantity: number
+  projectIds: Set<string>
+  lastDispatchDate: string
+}
+
+const RECENT_USAGE_RANGES = {
+  last7Days: 7,
+  last15Days: 15,
+  last30Days: 30,
+} as const
+
 function toNumber(value: unknown) {
   const numberValue = Number(value ?? 0)
   return Number.isFinite(numberValue) ? numberValue : 0
@@ -91,6 +107,44 @@ function makeUsageBucket(key: string, label: string): UsageBucket {
     productIds: new Set<string>(),
     projectIds: new Set<string>(),
   }
+}
+
+function makeRecentUsageProduct(
+  productId: string,
+  name: string,
+  code: string,
+  family: string
+): RecentUsageProduct {
+  return {
+    productId,
+    name,
+    code,
+    family,
+    quantity: 0,
+    projectIds: new Set<string>(),
+    lastDispatchDate: '',
+  }
+}
+
+function recentRangeStart(baseDate: Date, days: number) {
+  const start = new Date(baseDate)
+  start.setHours(0, 0, 0, 0)
+  start.setDate(start.getDate() - (days - 1))
+  return start
+}
+
+function recentUsageRows(map: Map<string, RecentUsageProduct>) {
+  return Array.from(map.values())
+    .sort((a, b) => b.quantity - a.quantity)
+    .map((product) => ({
+      productId: product.productId,
+      name: product.name,
+      code: product.code,
+      family: product.family,
+      quantity: product.quantity,
+      projects: product.projectIds.size,
+      lastDispatchDate: product.lastDispatchDate,
+    }))
 }
 
 function addUsageBucketValue(
@@ -499,6 +553,19 @@ export async function GET() {
       monthly: new Map<string, UsageBucket>(),
       annual: new Map<string, UsageBucket>(),
     }
+    const recentUsageMaps = {
+      last7Days: new Map<string, RecentUsageProduct>(),
+      last15Days: new Map<string, RecentUsageProduct>(),
+      last30Days: new Map<string, RecentUsageProduct>(),
+    }
+    const recentUsageBaseDate = new Date()
+    const recentUsageEndDate = new Date(recentUsageBaseDate)
+    recentUsageEndDate.setHours(23, 59, 59, 999)
+    const recentUsageStarts = {
+      last7Days: recentRangeStart(recentUsageBaseDate, RECENT_USAGE_RANGES.last7Days),
+      last15Days: recentRangeStart(recentUsageBaseDate, RECENT_USAGE_RANGES.last15Days),
+      last30Days: recentRangeStart(recentUsageBaseDate, RECENT_USAGE_RANGES.last30Days),
+    }
     const productUsageMap = new Map<
       string,
       {
@@ -556,6 +623,28 @@ export async function GET() {
         const productFamily = item.product?.family || 'Sin familia'
 
         if (dispatchDate) {
+          for (const [rangeKey, rangeStart] of Object.entries(recentUsageStarts) as [
+            keyof typeof recentUsageStarts,
+            Date,
+          ][]) {
+            if (dispatchDate < rangeStart || dispatchDate > recentUsageEndDate) continue
+
+            const recentMap = recentUsageMaps[rangeKey]
+            const recentProduct =
+              recentMap.get(productId) ||
+              makeRecentUsageProduct(productId, productName, productCode, productFamily)
+
+            recentProduct.quantity += quantity
+            recentProduct.projectIds.add(projectId)
+            if (
+              !recentProduct.lastDispatchDate ||
+              dispatchDate > (dateFrom(recentProduct.lastDispatchDate) || new Date(0))
+            ) {
+              recentProduct.lastDispatchDate = dispatch.dispatchDate
+            }
+            recentMap.set(productId, recentProduct)
+          }
+
           addUsageBucketValue(
             usagePeriodMaps.daily,
             dayKeyFromDate(dispatchDate),
@@ -742,6 +831,11 @@ export async function GET() {
         activeProjects: usageProjectIds.size,
         topUsedProducts,
         productHistory,
+        recentRanges: {
+          last7Days: recentUsageRows(recentUsageMaps.last7Days),
+          last15Days: recentUsageRows(recentUsageMaps.last15Days),
+          last30Days: recentUsageRows(recentUsageMaps.last30Days),
+        },
         byPeriod: {
           daily: usageDaily,
           weekly: usageWeekly,

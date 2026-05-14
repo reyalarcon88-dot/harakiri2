@@ -143,6 +143,7 @@ const CHART = {
 }
 
 type UsagePeriod = 'daily' | 'weekly' | 'monthly' | 'annual'
+type RecentUsageRange = 'last7Days' | 'last15Days' | 'last30Days'
 
 type UsagePeriodRow = {
   key: string
@@ -169,11 +170,27 @@ type ProductUsageHistory = {
   }[]
 }
 
+type RecentUsageProduct = {
+  productId: string
+  name: string
+  code: string
+  family: string
+  quantity: number
+  projects: number
+  lastDispatchDate: string
+}
+
 const USAGE_PERIOD_LABEL_KEYS: Record<UsagePeriod, MessageKey> = {
   daily: 'reports.usage.period.daily',
   weekly: 'reports.usage.period.weekly',
   monthly: 'reports.usage.period.monthly',
   annual: 'reports.usage.period.annual',
+}
+
+const RECENT_USAGE_RANGE_LABEL_KEYS: Record<RecentUsageRange, MessageKey> = {
+  last7Days: 'reports.usage.recent.range.last7Days',
+  last15Days: 'reports.usage.recent.range.last15Days',
+  last30Days: 'reports.usage.recent.range.last30Days',
 }
 
 const USAGE_PERIOD_HELPER_KEYS: Record<UsagePeriod, MessageKey> = {
@@ -253,6 +270,7 @@ interface ReportsSummary {
       projects: number
     }[]
     productHistory: ProductUsageHistory[]
+    recentRanges: Record<RecentUsageRange, RecentUsageProduct[]>
     byPeriod: Record<UsagePeriod, UsagePeriodRow[]>
   }
   operations: {
@@ -407,6 +425,8 @@ function ReportsLoading() {
 export function ReportsModule() {
   const { locale, t } = useI18n()
   const [usagePeriod, setUsagePeriod] = useState<UsagePeriod>('monthly')
+  const [recentUsageRange, setRecentUsageRange] = useState<RecentUsageRange>('last30Days')
+  const [recentUsageSearch, setRecentUsageSearch] = useState('')
   const [usageSearch, setUsageSearch] = useState('')
   const [selectedProductId, setSelectedProductId] = useState<string | null>(null)
   const [moneyDialogOpen, setMoneyDialogOpen] = useState(false)
@@ -499,6 +519,13 @@ export function ReportsModule() {
     (peak, row) => (row.quantity > peak.quantity ? row : peak),
     { label: t('reports.empty.noData'), quantity: 0 } as Pick<UsagePeriodRow, 'label' | 'quantity'>
   )
+  const recentUsageRows = usage.recentRanges?.[recentUsageRange] || []
+  const recentUsageSearchTerm = recentUsageSearch.trim().toLowerCase()
+  const filteredRecentUsageRows = recentUsageRows.filter((product) => {
+    if (!recentUsageSearchTerm) return true
+    return `${product.name} ${product.code} ${product.family}`.toLowerCase().includes(recentUsageSearchTerm)
+  })
+  const recentUsageTotal = recentUsageRows.reduce((sum, product) => sum + product.quantity, 0)
   const usageSearchTerm = usageSearch.trim().toLowerCase()
   const filteredProductHistory = usage.productHistory
     .filter((product) => {
@@ -847,6 +874,96 @@ export function ReportsModule() {
               tone="amber"
             />
           </div>
+
+          <Card>
+            <CardHeader className="gap-3 pb-2 lg:flex-row lg:items-start lg:justify-between">
+              <div>
+                <CardTitle className="text-sm">{t('reports.usage.recent.title')}</CardTitle>
+                <CardDescription className="text-xs">
+                  {t('reports.usage.recent.description')}
+                </CardDescription>
+              </div>
+              <div className="flex w-full flex-col gap-2 lg:w-auto lg:min-w-[520px] lg:flex-row lg:justify-end">
+                <div className="flex flex-wrap gap-2">
+                  {(Object.keys(RECENT_USAGE_RANGE_LABEL_KEYS) as RecentUsageRange[]).map((range) => (
+                    <Button
+                      key={range}
+                      type="button"
+                      size="sm"
+                      variant={recentUsageRange === range ? 'default' : 'outline'}
+                      onClick={() => setRecentUsageRange(range)}
+                    >
+                      {t(RECENT_USAGE_RANGE_LABEL_KEYS[range])}
+                    </Button>
+                  ))}
+                </div>
+                <div className="relative w-full lg:max-w-xs">
+                  <Search className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={recentUsageSearch}
+                    onChange={(event) => setRecentUsageSearch(event.target.value)}
+                    placeholder={t('reports.usage.recent.searchPlaceholder')}
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              <div className="mb-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                <Badge variant="secondary" className="rounded-md">
+                  {t('reports.usage.recent.total', {
+                    count: formatNumber(locale, recentUsageTotal),
+                  })}
+                </Badge>
+                <span>
+                  {t('reports.usage.recent.visible', {
+                    count: formatNumber(locale, filteredRecentUsageRows.length),
+                  })}
+                </span>
+              </div>
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>{t('reports.tables.product')}</TableHead>
+                    <TableHead>{t('reports.tables.family')}</TableHead>
+                    <TableHead className="text-right">{t('reports.common.used')}</TableHead>
+                    <TableHead className="text-right">{t('reports.tables.projects')}</TableHead>
+                    <TableHead className="text-right">{t('reports.dialog.lastUse')}</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {filteredRecentUsageRows.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="py-8 text-center text-sm text-muted-foreground">
+                        {recentUsageSearchTerm
+                          ? t('reports.usage.recent.noMatches')
+                          : t('reports.usage.recent.empty')}
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    filteredRecentUsageRows.map((product) => (
+                      <TableRow key={product.productId}>
+                        <TableCell>
+                          <p className="font-medium">{product.name}</p>
+                          <p className="text-xs text-muted-foreground">{product.code || t('reports.common.noCode')}</p>
+                        </TableCell>
+                        <TableCell className="text-muted-foreground">{product.family}</TableCell>
+                        <TableCell className="text-right font-medium tabular-nums">
+                          {formatNumber(locale, product.quantity)}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          {formatNumber(locale, product.projects)}
+                        </TableCell>
+                        <TableCell className="text-right text-muted-foreground">
+                          {formatDate(locale, product.lastDispatchDate, t('reports.common.noDate'))}
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </CardContent>
+          </Card>
 
           <div className="grid gap-4 xl:grid-cols-[1.35fr_0.85fr]">
             <ChartPanel
