@@ -38,6 +38,14 @@ function dispositionFor(fileName: string, download: boolean) {
   return `${mode}; filename*=UTF-8''${encodedName}`
 }
 
+function getPublicDirs() {
+  const cwd = process.cwd()
+  return Array.from(new Set([
+    path.resolve(cwd, 'public'),
+    path.resolve(cwd, '..', '..', 'public'),
+  ]))
+}
+
 export async function createStoredDocumentResponse(
   request: NextRequest,
   document: StoredDocumentResponseInput
@@ -46,14 +54,36 @@ export async function createStoredDocumentResponse(
     return NextResponse.redirect(document.fileUrl)
   }
 
-  const publicDir = path.resolve(process.cwd(), 'public')
-  const filePath = path.resolve(publicDir, document.fileUrl.replace(/^\/+/, ''))
+  const relativePath = document.fileUrl.replace(/^\/+/, '')
+  const candidatePaths = getPublicDirs().map((publicDir) => ({
+    publicDir,
+    filePath: path.resolve(publicDir, relativePath),
+  }))
 
-  if (!filePath.startsWith(publicDir)) {
+  if (candidatePaths.some(({ publicDir, filePath }) => !filePath.startsWith(publicDir))) {
     return NextResponse.json({ error: 'Ruta de documento invalida' }, { status: 400 })
   }
 
-  const file = await readFile(filePath)
+  let file: Buffer | null = null
+  for (const { filePath } of candidatePaths) {
+    try {
+      file = await readFile(filePath)
+      break
+    } catch (error) {
+      if (error && typeof error === 'object' && 'code' in error && error.code === 'ENOENT') {
+        continue
+      }
+      throw error
+    }
+  }
+
+  if (!file) {
+    return NextResponse.json(
+      { error: 'El archivo del documento no existe en el servidor' },
+      { status: 404 }
+    )
+  }
+
   const download = request.nextUrl.searchParams.get('download') === '1'
 
   return new NextResponse(new Uint8Array(file), {

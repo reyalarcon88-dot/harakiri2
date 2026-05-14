@@ -75,6 +75,7 @@ export function DocumentPreview({
   const [previewError, setPreviewError] = useState<string | null>(null)
   const [textContent, setTextContent] = useState('')
   const [textLoading, setTextLoading] = useState(previewKind === 'text')
+  const [pdfChecking, setPdfChecking] = useState(previewKind === 'pdf')
 
   useEffect(() => {
     const element = containerRef.current
@@ -129,6 +130,41 @@ export function DocumentPreview({
     return () => controller.abort()
   }, [document.id, onLoadError, onLoadSuccess, previewKind, refreshKey, resolvedUrl, t])
 
+  useEffect(() => {
+    if (previewKind !== 'pdf') {
+      setPdfChecking(false)
+      return
+    }
+
+    const controller = new AbortController()
+    setPdfChecking(true)
+    setPreviewError(null)
+
+    fetch(resolvedUrl, { method: 'HEAD', signal: controller.signal })
+      .then((response) => {
+        if (response.status === 404) {
+          throw new Error(t('documents.preview.fileMissing'))
+        }
+
+        if (!response.ok && response.status !== 405) {
+          throw new Error(t('documents.preview.openPdfError'))
+        }
+      })
+      .catch((error) => {
+        if (controller.signal.aborted) return
+        const message = error instanceof Error ? error.message : t('documents.preview.openPdfError')
+        setPreviewError(message)
+        onLoadError(message)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) {
+          setPdfChecking(false)
+        }
+      })
+
+    return () => controller.abort()
+  }, [document.id, onLoadError, previewKind, refreshKey, resolvedUrl, t])
+
   const pageWidth = Math.max(320, Math.min(containerWidth - 56, 1180) * zoom)
 
   return (
@@ -136,7 +172,17 @@ export function DocumentPreview({
       ref={containerRef}
       className="flex h-full min-h-0 items-start justify-center overflow-auto bg-[linear-gradient(180deg,rgba(255,255,255,0.02),transparent_35%),radial-gradient(circle_at_top,rgba(148,163,184,0.08),transparent_32%)] p-4 md:p-6"
     >
-      {previewKind === 'pdf' ? (
+      {previewKind === 'pdf' && pdfChecking ? (
+        <div className="flex items-center gap-2 rounded-md border border-border/70 bg-card/80 px-4 py-3 text-sm text-muted-foreground">
+          <Loader2 className="h-4 w-4 animate-spin" />
+          {t('documents.preview.loadingPdf')}
+        </div>
+      ) : null}
+
+      {previewKind === 'pdf' && !pdfChecking ? (
+        previewError ? (
+          <PreviewError message={previewError} document={document} />
+        ) : (
         <Document
           file={resolvedUrl}
           key={`${document.id}-${refreshKey}`}
@@ -157,24 +203,21 @@ export function DocumentPreview({
             onLoadError(message)
           }}
         >
-          {previewError ? (
-            <PreviewError message={previewError} document={document} />
-          ) : (
-            <Page
-              pageNumber={pageNumber}
-              width={pageWidth}
-              rotate={rotation}
-              renderAnnotationLayer={false}
-              renderTextLayer={false}
-              loading={
-                <div className="rounded-md border border-border/70 bg-card/80 px-4 py-3 text-sm text-muted-foreground shadow-sm">
-                  {t('documents.preview.renderingPage')}
-                </div>
-              }
-              className="[&_.react-pdf__Page__canvas]:mx-auto [&_.react-pdf__Page__canvas]:rounded-md [&_.react-pdf__Page__canvas]:shadow-[0_24px_60px_rgba(15,23,42,0.16)]"
-            />
-          )}
+          <Page
+            pageNumber={pageNumber}
+            width={pageWidth}
+            rotate={rotation}
+            renderAnnotationLayer={false}
+            renderTextLayer={false}
+            loading={
+              <div className="rounded-md border border-border/70 bg-card/80 px-4 py-3 text-sm text-muted-foreground shadow-sm">
+                {t('documents.preview.renderingPage')}
+              </div>
+            }
+            className="[&_.react-pdf__Page__canvas]:mx-auto [&_.react-pdf__Page__canvas]:rounded-md [&_.react-pdf__Page__canvas]:shadow-[0_24px_60px_rgba(15,23,42,0.16)]"
+          />
         </Document>
+        )
       ) : null}
 
       {previewKind === 'image' ? (
