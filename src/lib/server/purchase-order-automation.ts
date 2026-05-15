@@ -31,7 +31,7 @@ function getSmtpConfig() {
 }
 
 async function generateWarehousePdf(origin: string, purchaseId: string) {
-  const response = await fetch(`${origin}/api/purchases/${purchaseId}/pdf?deliverTo=warehouse`, {
+  const response = await fetch(`${origin}/api/purchases/${purchaseId}/pdf?deliverTo=warehouse&archive=0`, {
     cache: 'no-store',
   })
 

@@ -66,6 +66,7 @@ async function archivePurchasePdf(purchaseId: string, fileName: string, buffer: 
   await mkdir(uploadDir, { recursive: true })
 
   const uniqueFilename = `${Date.now()}-auto-purchase-order.pdf`
+  const fileUrl = `/uploads/purchases/${uniqueFilename}`
   await writeFile(path.join(uploadDir, uniqueFilename), buffer)
 
   await db.purchaseDocuments.deleteMany({
@@ -79,9 +80,51 @@ async function archivePurchasePdf(purchaseId: string, fileName: string, buffer: 
     data: {
       purchaseId,
       fileName,
-      fileUrl: `/uploads/purchases/${uniqueFilename}`,
+      fileUrl,
       fileSize: buffer.length,
       fileType: 'application/pdf',
+    },
+  })
+
+  return { fileUrl, fileSize: buffer.length }
+}
+
+async function archiveProjectOrderPdf(
+  projectId: string | null | undefined,
+  fileName: string,
+  fileUrl: string,
+  fileSize: number,
+) {
+  if (!projectId) return null
+
+  const existing = await db.projectDocuments.findFirst({
+    where: {
+      projectId,
+      fileName,
+      category: 'sales_order',
+    },
+  })
+
+  if (existing) {
+    return db.projectDocuments.update({
+      where: { id: existing.id },
+      data: {
+        fileUrl,
+        fileSize,
+        fileType: 'application/pdf',
+        category: 'sales_order',
+      },
+    })
+  }
+
+  return db.projectDocuments.create({
+    data: {
+      projectId,
+      fileName,
+      fileUrl,
+      fileSize,
+      fileType: 'application/pdf',
+      category: 'sales_order',
     },
   })
 }
@@ -477,6 +520,7 @@ export async function GET(
     const { id } = await params
     const url = new URL(request.url)
     const deliverTo = url.searchParams.get('deliverTo') || 'warehouse' // 'warehouse' | 'client' | 'custom'
+    const shouldArchive = url.searchParams.get('archive') !== '0'
     const customAddress = url.searchParams.get('customAddress') || ''
 
     const purchase = await db.purchases.findUnique({
@@ -595,7 +639,10 @@ export async function GET(
       ).toBuffer())
     }
 
-    await archivePurchasePdf(purchase.id, fileName, pdfBuffer)
+    if (shouldArchive) {
+      const archived = await archivePurchasePdf(purchase.id, fileName, pdfBuffer)
+      await archiveProjectOrderPdf(purchase.projectId, fileName, archived.fileUrl, archived.fileSize)
+    }
 
     return new NextResponse(pdfBuffer, {
       headers: {
