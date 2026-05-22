@@ -18,6 +18,7 @@ import {
   Truck,
   Users,
   Warehouse,
+  Wrench,
 } from 'lucide-react'
 import { useI18n } from '@/components/layout/I18nProvider'
 import {
@@ -45,6 +46,7 @@ const mainNavItems: NavItem[] = [
   { labelKey: 'navigation.page.dashboard', page: 'dashboard', icon: LayoutDashboard },
   { labelKey: 'navigation.page.warehouses', page: 'warehouses', icon: Warehouse },
   { labelKey: 'navigation.page.products', page: 'products', icon: Package },
+  { labelKey: 'navigation.page.tools', page: 'tools', icon: Wrench },
   { labelKey: 'navigation.page.projects', page: 'projects', icon: FolderKanban },
   { labelKey: 'navigation.page.purchases', page: 'purchases', icon: ShoppingCart },
   { labelKey: 'navigation.page.recepcion', page: 'recepcion', icon: Inbox },
@@ -53,6 +55,7 @@ const mainNavItems: NavItem[] = [
 ]
 
 const peopleNavItems: NavItem[] = [
+  { labelKey: 'navigation.page.personnel', page: 'personnel', icon: Users },
   { labelKey: 'navigation.page.suppliers', page: 'suppliers', icon: Truck },
   { labelKey: 'navigation.page.clients', page: 'clients', icon: Users },
   { labelKey: 'navigation.page.contractors', page: 'contractors', icon: HardHat },

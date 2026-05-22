@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useMemo } from 'react'
+import { useEffect, useState, useMemo } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import {
   format,
@@ -33,12 +33,16 @@ import {
   CheckCircle2,
   Circle,
   Clock,
+  Layers,
+  StickyNote,
 } from 'lucide-react'
 import { toast } from 'sonner'
 import { useI18n } from '@/components/layout/I18nProvider'
+import { useNavigationStore } from '@/stores/navigation'
 import { ConfirmDeleteDialog } from '@/components/shared/ConfirmDeleteDialog'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Separator } from '@/components/ui/separator'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
@@ -70,6 +74,7 @@ import {
 import { Draggable } from '@/components/shared/Draggable'
 import { Droppable } from '@/components/shared/Droppable'
 import type { Locale as AppLocale, MessageKey } from '@/lib/i18n/messages'
+import { PROJECT_PHASE_COLOR_CLASS } from '@/lib/project-phases'
 
 // ─── Types ───────────────────────────────────────────────────────────────────────
 
@@ -96,11 +101,34 @@ interface Project {
   status: string
   client: { id: string; name: string }
   contractor?: { id: string; name: string } | null
+  phases?: ProjectPhase[]
+}
+
+interface ProjectPhaseType {
+  id: string
+  name: string
+  color: string
+  sortOrder: number
+  active: boolean
+}
+
+interface ProjectPhase {
+  id: string
+  projectId: string
+  phaseTypeId: string
+  startDate: string
+  endDate: string
+  status: string
+  sortOrder: number
+  completedAt: string | null
+  notes?: string
+  phaseType: ProjectPhaseType
+  project?: Project
 }
 
 interface CalendarEvent {
-  type: 'task' | 'project'
-  data: Task | Project
+  type: 'task' | 'project' | 'phase'
+  data: Task | Project | ProjectPhase
   dateStr: string
   taskDateType?: 'due' | 'alarm'
 }
@@ -110,9 +138,27 @@ interface MovingProject {
   sourceDate: string
 }
 
+interface MovingPhase {
+  phaseId: string
+  projectId: string
+  sourceDate: string
+}
+
 interface DraggedProject {
   project: Project
   sourceDate: string
+}
+
+interface DraggedPhase {
+  phase: ProjectPhase
+  sourceDate: string
+}
+
+interface CalendarEventFilters {
+  projects: boolean
+  phases: boolean
+  taskDue: boolean
+  taskAlarm: boolean
 }
 
 // ─── Constants ───────────────────────────────────────────────────────────────────
@@ -136,6 +182,34 @@ const TASK_STATUS_CONFIG: Record<string, { className: string; dotColor: string; 
     bg: 'rgba(16,185,129,0.15)',
     text: '#059669',
   },
+}
+
+const CALENDAR_EVENT_FILTERS_STORAGE_KEY = 'harakiri.calendar.eventFilters'
+
+const DEFAULT_CALENDAR_EVENT_FILTERS: CalendarEventFilters = {
+  projects: true,
+  phases: true,
+  taskDue: true,
+  taskAlarm: true,
+}
+
+function getStoredCalendarEventFilters(): CalendarEventFilters {
+  if (typeof window === 'undefined') return DEFAULT_CALENDAR_EVENT_FILTERS
+
+  try {
+    const raw = window.localStorage.getItem(CALENDAR_EVENT_FILTERS_STORAGE_KEY)
+    if (!raw) return DEFAULT_CALENDAR_EVENT_FILTERS
+
+    const parsed = JSON.parse(raw) as Partial<CalendarEventFilters>
+    return {
+      projects: parsed.projects !== false,
+      phases: parsed.phases !== false,
+      taskDue: parsed.taskDue !== false,
+      taskAlarm: parsed.taskAlarm !== false,
+    }
+  } catch {
+    return DEFAULT_CALENDAR_EVENT_FILTERS
+  }
 }
 
 const PROJECT_STATUS_CONFIG: Record<string, { className: string; dotColor: string; bg: string; text: string; border: string }> = {
@@ -264,20 +338,20 @@ function toDateKey(date: Date): string {
 }
 
 function getProjectDateRange(project: Project): { start: Date | null; end: Date | null } {
-  let start = parseDateSafe(project.startDate)
+  const start = parseDateSafe(project.startDate)
   let end = parseDateSafe(project.endDate)
-  // Fallback to projectDate if no start/end
-  if (!start && !end) {
-    const pd = parseDateSafe(project.projectDate)
-    if (pd) {
-      start = pd
-      end = pd
-    }
-  } else if (start && !end) {
+
+  if (start && !end) {
     end = start
-  } else if (!start && end) {
-    start = end
   }
+
+  return { start, end }
+}
+
+function getPhaseDateRange(phase: ProjectPhase): { start: Date | null; end: Date | null } {
+  const start = parseDateSafe(phase.startDate)
+  let end = parseDateSafe(phase.endDate)
+  if (start && !end) end = start
   return { start, end }
 }
 
@@ -303,6 +377,18 @@ function getProjectCfg(status: string, t: (key: MessageKey) => string) {
   }
 }
 
+function getPhaseStatusLabel(status: string) {
+  if (status === 'completed') return 'Completada'
+  if (status === 'in_progress') return 'En progreso'
+  return 'Pendiente'
+}
+
+function getPhaseStatusClass(status: string) {
+  if (status === 'completed') return 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300'
+  if (status === 'in_progress') return 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300'
+  return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300'
+}
+
 // ─── Component ───────────────────────────────────────────────────────────────────
 
 export function CalendarModule() {
@@ -318,9 +404,16 @@ export function CalendarModule() {
   const [editingDescription, setEditingDescription] = useState('')
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [movingProject, setMovingProject] = useState<MovingProject | null>(null)
+  const [movingPhase, setMovingPhase] = useState<MovingPhase | null>(null)
   const [draggedProject, setDraggedProject] = useState<DraggedProject | null>(null)
+  const [draggedPhase, setDraggedPhase] = useState<DraggedPhase | null>(null)
+  const [eventFilters, setEventFilters] = useState<CalendarEventFilters>(getStoredCalendarEventFilters)
+  const [selectedPhase, setSelectedPhase] = useState<ProjectPhase | null>(null)
+  const [phasePanelOpen, setPhasePanelOpen] = useState(false)
+  const [phaseNoteInput, setPhaseNoteInput] = useState('')
 
   const queryClient = useQueryClient()
+  const openProject = useNavigationStore((state) => state.openProject)
   const dateLocale = getDateFnsLocale(locale)
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -356,6 +449,16 @@ export function CalendarModule() {
 
   const isLoading = loadingTasks || loadingProjects
 
+  useEffect(() => {
+    window.localStorage.setItem(CALENDAR_EVENT_FILTERS_STORAGE_KEY, JSON.stringify(eventFilters))
+  }, [eventFilters])
+
+  function setEventFilter(filter: keyof CalendarEventFilters, checked: boolean) {
+    setEventFilters((current) => ({ ...current, [filter]: checked }))
+  }
+
+  const noEventTypesSelected = !eventFilters.projects && !eventFilters.phases && !eventFilters.taskDue && !eventFilters.taskAlarm
+
   // ─── Group events by date ───
 
   const eventsByDate = useMemo(() => {
@@ -369,26 +472,48 @@ export function CalendarModule() {
 
     // Tasks appear on their alarm date and due date. If both dates match, keep one event.
     for (const task of tasks) {
-      if (task.alarmDate) addTaskEvent(task, task.alarmDate, 'alarm')
-      if (task.dueDate && task.dueDate !== task.alarmDate) addTaskEvent(task, task.dueDate, 'due')
+      if (eventFilters.taskAlarm && task.alarmDate) addTaskEvent(task, task.alarmDate, 'alarm')
+      if (eventFilters.taskDue && task.dueDate && (!eventFilters.taskAlarm || task.dueDate !== task.alarmDate)) {
+        addTaskEvent(task, task.dueDate, 'due')
+      }
     }
 
     // For each project, add an event to every day within its date range
-    for (const p of projects) {
-      const { start, end } = getProjectDateRange(p)
-      if (!start || !end) continue
-      let day = start
-      while (day <= end) {
-        const key = format(day, 'yyyy-MM-dd')
-        const list = map.get(key) || []
-        list.push({ type: 'project', data: p, dateStr: key })
-        map.set(key, list)
-        day = addDays(day, 1)
+    if (eventFilters.projects) {
+      for (const p of projects) {
+        if ((p.phases || []).length > 0) continue
+        const { start, end } = getProjectDateRange(p)
+        if (!start || !end) continue
+        let day = start
+        while (day <= end) {
+          const key = format(day, 'yyyy-MM-dd')
+          const list = map.get(key) || []
+          list.push({ type: 'project', data: p, dateStr: key })
+          map.set(key, list)
+          day = addDays(day, 1)
+        }
+      }
+    }
+
+    if (eventFilters.phases) {
+      for (const project of projects) {
+        for (const phase of project.phases || []) {
+          const { start, end } = getPhaseDateRange(phase)
+          if (!start || !end) continue
+          let day = start
+          while (day <= end) {
+            const key = format(day, 'yyyy-MM-dd')
+            const list = map.get(key) || []
+            list.push({ type: 'phase', data: { ...phase, project }, dateStr: key })
+            map.set(key, list)
+            day = addDays(day, 1)
+          }
+        }
       }
     }
 
     return map
-  }, [tasks, projects])
+  }, [tasks, projects, eventFilters])
 
   const calendarDays = useMemo(() => getCalendarDays(currentMonth), [currentMonth])
 
@@ -406,7 +531,27 @@ export function CalendarModule() {
     return (eventsByDate.get(dayKey) || []).filter((e) => e.type === 'project').map((e) => e.data as Project)
   }, [dayKey, eventsByDate])
 
-  const dayTotalEvents = dayTasks.length + dayProjects.length
+  const dayPhases = useMemo(() => {
+    if (!dayKey) return []
+    return (eventsByDate.get(dayKey) || []).filter((e) => e.type === 'phase').map((e) => e.data as ProjectPhase)
+  }, [dayKey, eventsByDate])
+
+  const dayTotalEvents = dayTasks.length + dayProjects.length + dayPhases.length
+
+  const dayProjectsWithPhases = useMemo(() => {
+    if (!dayKey) return []
+    const projectMap = new Map<string, { project: Project; phases: ProjectPhase[] }>()
+    for (const proj of dayProjects) {
+      if (!projectMap.has(proj.id)) projectMap.set(proj.id, { project: proj, phases: [] })
+    }
+    for (const phase of dayPhases) {
+      if (phase.project) {
+        if (!projectMap.has(phase.projectId)) projectMap.set(phase.projectId, { project: phase.project, phases: [] })
+        projectMap.get(phase.projectId)!.phases.push(phase)
+      }
+    }
+    return Array.from(projectMap.values())
+  }, [dayKey, dayProjects, dayPhases])
 
   // ─── Month navigation ───
 
@@ -424,6 +569,22 @@ export function CalendarModule() {
   function closeDaySheet() {
     setDaySheetOpen(false)
     setTimeout(() => setSelectedDay(null), 200)
+  }
+
+  function openPhasePanel(phase: ProjectPhase) {
+    setSelectedPhase(phase)
+    setPhaseNoteInput(phase.notes || '')
+    setPhasePanelOpen(true)
+  }
+
+  function closePhasePanel() {
+    setPhasePanelOpen(false)
+    setTimeout(() => setSelectedPhase(null), 200)
+  }
+
+  function openProjectFromCalendar(projectId: string) {
+    closeDaySheet()
+    openProject(projectId)
   }
 
   // ─── Task detail sheet ───
@@ -518,6 +679,42 @@ export function CalendarModule() {
     onError: (err: Error) => toast.error(err.message || t('calendar.toast.projectDatesUpdateError')),
   })
 
+  const updatePhaseMutation = useMutation({
+    mutationFn: ({ phase, data }: { phase: ProjectPhase; data: Record<string, unknown> }) =>
+      fetch(`/api/projects/${phase.projectId}/phases/${phase.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(data),
+      }).then((r) => {
+        if (!r.ok) return r.json().then((payload) => { throw new Error(payload?.error || 'Could not update phase') })
+        return r.json()
+      }),
+    onSuccess: (updatedPhase) => {
+      queryClient.invalidateQueries({ queryKey: ['calendar-projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['project'] })
+      toast.success('Fase actualizada')
+      setSelectedPhase((prev) =>
+        prev && prev.id === updatedPhase.id ? { ...updatedPhase, project: prev.project } : prev
+      )
+    },
+    onError: (err: Error) => toast.error(err.message || 'No se pudo actualizar la fase'),
+  })
+
+  const toggleTaskMutation = useMutation({
+    mutationFn: ({ id, status }: { id: string; status: string }) =>
+      fetch(`/api/tasks/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status }),
+      }).then((r) => r.json()),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['calendar-tasks'] })
+      queryClient.invalidateQueries({ queryKey: ['tasks'] })
+    },
+    onError: () => toast.error('No se pudo actualizar la tarea'),
+  })
+
   function startEditStatus() {
     if (selectedTask) {
       setEditingStatus(selectedTask.status)
@@ -571,6 +768,32 @@ export function CalendarModule() {
     })
   }
 
+  function movePhaseByDays(phase: ProjectPhase, dayDelta: number) {
+    const { start, end } = getPhaseDateRange(phase)
+    if (!start) return
+    const endDate = end ?? start
+    updatePhaseMutation.mutate({
+      phase,
+      data: {
+        startDate: toDateKey(addDays(start, dayDelta)),
+        endDate: toDateKey(addDays(endDate, dayDelta)),
+      },
+    })
+  }
+
+  function updatePhaseDateField(phase: ProjectPhase, field: 'startDate' | 'endDate', value: string) {
+    if (!value) return
+    let nextStart = field === 'startDate' ? value : phase.startDate
+    let nextEnd = field === 'endDate' ? value : phase.endDate
+    const parsedStart = parseDateSafe(nextStart)
+    const parsedEnd = parseDateSafe(nextEnd)
+    if (parsedStart && parsedEnd && parsedStart > parsedEnd) {
+      if (field === 'startDate') nextEnd = nextStart
+      else nextStart = nextEnd
+    }
+    updatePhaseMutation.mutate({ phase, data: { startDate: nextStart, endDate: nextEnd } })
+  }
+
   function updateProjectDateField(project: Project, field: 'startDate' | 'endDate', value: string) {
     if (!value) return
     const current = getProjectRangeDateKeys(project)
@@ -612,9 +835,38 @@ export function CalendarModule() {
     setMovingProject(null)
   }
 
+  function handlePhaseMoveTarget(targetDay: Date) {
+    if (!movingPhase) return
+    const project = projects.find((item) => item.id === movingPhase.projectId)
+    const phase = project?.phases?.find((item) => item.id === movingPhase.phaseId)
+    if (!phase) {
+      setMovingPhase(null)
+      return
+    }
+    const source = parseDateSafe(movingPhase.sourceDate)
+    if (!source) {
+      setMovingPhase(null)
+      return
+    }
+    const dayDelta = differenceInCalendarDays(targetDay, source)
+    if (dayDelta !== 0) movePhaseByDays({ ...phase, project }, dayDelta)
+    setMovingPhase(null)
+  }
+
   function handleDragStart(event: DragStartEvent) {
     const { active } = event
-    const projectId = active.id as string
+    const activeId = String(active.id)
+    if (activeId.startsWith('phase:')) {
+      const phaseId = activeId.slice('phase:'.length)
+      for (const project of projects) {
+        const phase = project.phases?.find((item) => item.id === phaseId)
+        if (phase) {
+          setDraggedPhase({ phase: { ...phase, project }, sourceDate: format(new Date(), 'yyyy-MM-dd') })
+          return
+        }
+      }
+    }
+    const projectId = activeId.startsWith('project:') ? activeId.slice('project:'.length) : activeId
     const project = projects.find((p) => p.id === projectId)
     if (project) {
       setDraggedProject({
@@ -627,15 +879,38 @@ export function CalendarModule() {
   function handleDragEnd(event: DragEndEvent) {
     const { active, over } = event
     setDraggedProject(null)
+    setDraggedPhase(null)
 
     if (!over) return
 
-    const projectId = active.id as string
+    const activeId = String(active.id)
     const targetDateStr = over.id as string
     const targetDate = parseISO(targetDateStr)
 
     if (!isValid(targetDate)) return
 
+    if (activeId.startsWith('phase:')) {
+      const phaseId = activeId.slice('phase:'.length)
+      for (const project of projects) {
+        const phase = project.phases?.find((item) => item.id === phaseId)
+        if (!phase) continue
+        const { start, end } = getPhaseDateRange(phase)
+        if (!start) return
+        const endDate = end ?? start
+        const dayDelta = differenceInCalendarDays(targetDate, start)
+        if (dayDelta === 0) return
+        updatePhaseMutation.mutate({
+          phase: { ...phase, project },
+          data: {
+            startDate: toDateKey(addDays(start, dayDelta)),
+            endDate: toDateKey(addDays(endDate, dayDelta)),
+          },
+        })
+        return
+      }
+    }
+
+    const projectId = activeId.startsWith('project:') ? activeId.slice('project:'.length) : activeId
     const project = projects.find((p) => p.id === projectId)
     if (!project) return
 
@@ -695,12 +970,12 @@ export function CalendarModule() {
           </Button>
         </div>
         <div className="flex items-center gap-2">
-          {movingProject ? (
+          {movingProject || movingPhase ? (
             <>
               <div className="rounded-md border border-primary/30 bg-primary/10 px-3 py-1.5 text-xs font-medium text-primary">
-                {t('calendar.project.pickMoveDay')}
+                {movingPhase ? 'Escoge el nuevo dia para esta fase' : t('calendar.project.pickMoveDay')}
               </div>
-              <Button variant="outline" size="sm" onClick={() => setMovingProject(null)}>
+              <Button variant="outline" size="sm" onClick={() => { setMovingProject(null); setMovingPhase(null) }}>
                 {t('common.cancel')}
               </Button>
             </>
@@ -710,6 +985,54 @@ export function CalendarModule() {
           </Button>
         </div>
       </div>
+
+      <div className="flex flex-wrap items-center gap-3 rounded-lg border bg-muted/30 px-3 py-2 text-sm">
+        <span className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          {t('calendar.filters.title')}
+        </span>
+        <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-background">
+          <Checkbox
+            checked={eventFilters.projects}
+            onCheckedChange={(checked) => setEventFilter('projects', checked === true)}
+            aria-label={t('calendar.filters.projects')}
+          />
+          <FolderKanban className="h-3.5 w-3.5 text-muted-foreground" />
+          <span>{t('calendar.filters.projects')}</span>
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-background">
+          <Checkbox
+            checked={eventFilters.phases}
+            onCheckedChange={(checked) => setEventFilter('phases', checked === true)}
+            aria-label="Fases"
+          />
+          <Layers className="h-3.5 w-3.5 text-muted-foreground" />
+          <span>Fases</span>
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-background">
+          <Checkbox
+            checked={eventFilters.taskDue}
+            onCheckedChange={(checked) => setEventFilter('taskDue', checked === true)}
+            aria-label={t('calendar.filters.taskDue')}
+          />
+          <ListTodo className="h-3.5 w-3.5 text-muted-foreground" />
+          <span>{t('calendar.filters.taskDue')}</span>
+        </label>
+        <label className="flex cursor-pointer items-center gap-2 rounded-md px-2 py-1 transition-colors hover:bg-background">
+          <Checkbox
+            checked={eventFilters.taskAlarm}
+            onCheckedChange={(checked) => setEventFilter('taskAlarm', checked === true)}
+            aria-label={t('calendar.filters.taskAlarm')}
+          />
+          <Bell className="h-3.5 w-3.5 text-muted-foreground" />
+          <span>{t('calendar.filters.taskAlarm')}</span>
+        </label>
+      </div>
+
+      {noEventTypesSelected && (
+        <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800 dark:border-amber-900/50 dark:bg-amber-950/30 dark:text-amber-200">
+          {t('calendar.filters.noneSelected')}
+        </div>
+      )}
 
       {/* Calendar Grid */}
       <div className="rounded-lg border">
@@ -729,22 +1052,27 @@ export function CalendarModule() {
             const dayEvents = eventsByDate.get(dayKey) || []
             const dayTasksEvents = dayEvents.filter((e) => e.type === 'task')
             const dayProjectEvents = dayEvents.filter((e) => e.type === 'project')
+            const dayPhaseEvents = dayEvents.filter((e) => e.type === 'phase')
             const inMonth = isSameMonth(day, currentMonth)
             const today = isToday(day)
             const hasEvents = dayEvents.length > 0
 
             // Keep the month grid focused on projects. Tasks stay available from the day sheet.
-            const displayProjects = dayProjectEvents.slice(0, 3)
-            const remainingProjects = dayProjectEvents.length - 3
+            const displayCalendarItems = [...dayProjectEvents, ...dayPhaseEvents].slice(0, 3)
+            const remainingCalendarItems = dayProjectEvents.length + dayPhaseEvents.length - displayCalendarItems.length
 
             return (
               <Droppable key={i} id={dayKey} className={`min-h-[80px] border-b border-r p-1 transition-colors sm:min-h-[100px] ${
                 !inMonth ? 'bg-muted/30' : ''
-              } ${today ? 'bg-primary/5' : ''} ${movingProject ? 'outline outline-1 outline-primary/10 hover:bg-primary/5' : ''}`}>
+              } ${today ? 'bg-primary/5' : ''} ${movingProject || movingPhase ? 'outline outline-1 outline-primary/10 hover:bg-primary/5' : ''}`}>
                 <button
                   onClick={() => {
                     if (movingProject) {
                       handleProjectMoveTarget(day)
+                      return
+                    }
+                    if (movingPhase) {
+                      handlePhaseMoveTarget(day)
                       return
                     }
                     openDaySheet(day)
@@ -766,7 +1094,7 @@ export function CalendarModule() {
                   </span>
                 </button>
                 <div className="mt-1 space-y-0.5">
-                  {displayProjects.map((event) => {
+                  {displayCalendarItems.map((event) => {
                     if (event.type === 'task') {
                       const task = event.data as Task
                       const cfg = getTaskCfg(task.status, t)
@@ -787,6 +1115,24 @@ export function CalendarModule() {
                         </button>
                       )
                     } else {
+                      if (event.type === 'phase') {
+                        const phase = event.data as ProjectPhase
+                        const color = PROJECT_PHASE_COLOR_CLASS[phase.phaseType.color] || PROJECT_PHASE_COLOR_CLASS.teal
+                        const project = phase.project
+                        return (
+                          <Draggable key={`phase-${phase.id}`} id={`phase:${phase.id}`}>
+                            <button
+                              onClick={(e) => { e.stopPropagation(); openPhasePanel({ ...phase, project }) }}
+                              className={`w-full truncate rounded-sm border-l-2 px-1 py-0.5 text-left text-[10px] leading-tight font-bold transition-opacity hover:opacity-80 sm:text-xs cursor-pointer ${color.border}`}
+                              style={{ backgroundColor: color.bg, color: color.text }}
+                              title={`${phase.phaseType.name}${project ? ` · ${project.name}` : ''}`}
+                            >
+                              <Layers className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
+                              {phase.phaseType.name}{project ? ` · ${project.name}` : ''}
+                            </button>
+                          </Draggable>
+                        )
+                      }
                       const p = event.data as Project
                       const cfg = getProjectCfg(p.status, t)
                       const label = p.poNumber?.trim() || p.name
@@ -796,7 +1142,7 @@ export function CalendarModule() {
                         p.contractor?.name,
                       ].filter(Boolean)
                       return (
-                        <Draggable key={`proj-${p.id}`} id={p.id}>
+                        <Draggable key={`proj-${p.id}`} id={`project:${p.id}`}>
                           <button
                             onClick={(e) => { e.stopPropagation(); openDaySheet(day) }}
                             className={`w-full truncate rounded-sm border-l-2 px-1 py-0.5 text-left text-[10px] leading-tight font-bold transition-opacity hover:opacity-80 sm:text-xs cursor-pointer ${cfg.border}`}
@@ -810,12 +1156,12 @@ export function CalendarModule() {
                       )
                     }
                   })}
-                  {remainingProjects > 0 && (
+                  {remainingCalendarItems > 0 && (
                     <button
                       onClick={(e) => { e.stopPropagation(); openDaySheet(day) }}
                       className="w-full px-1 text-left text-[10px] text-muted-foreground hover:text-foreground transition-colors cursor-pointer font-medium"
                     >
-                      {t('calendar.moreEvents', { count: remainingProjects })}
+                      {t('calendar.moreEvents', { count: remainingCalendarItems })}
                     </button>
                   )}
                   {dayTasksEvents.length > 0 && (
@@ -882,8 +1228,14 @@ export function CalendarModule() {
                   </div>
                   <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-background/80 rounded-full px-3 py-1">
                     <FolderKanban className="h-3.5 w-3.5" />
-                    {t('calendar.day.projectsCount', { count: dayProjects.length })}
+                    {dayProjectsWithPhases.length} proyecto(s)
                   </div>
+                  {dayPhases.length > 0 && (
+                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground bg-background/80 rounded-full px-3 py-1">
+                      <Layers className="h-3.5 w-3.5" />
+                      {dayPhases.length} fase(s)
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -967,18 +1319,18 @@ export function CalendarModule() {
                       </div>
                     )}
 
-                    {/* Projects Section */}
-                    {dayProjects.length > 0 && (
+                    {/* Projects + Phases grouped section */}
+                    {dayProjectsWithPhases.length > 0 && (
                       <div className="space-y-3">
                         <div className="flex items-center gap-2">
                           <FolderKanban className="h-4 w-4 text-muted-foreground" />
                           <h4 className="text-sm font-semibold">{t('navigation.page.projects')}</h4>
                           <Badge variant="secondary" className="text-[10px] px-1.5 py-0">
-                            {dayProjects.length}
+                            {dayProjectsWithPhases.length}
                           </Badge>
                         </div>
-                        <div className="space-y-2">
-                          {dayProjects.map((project) => {
+                        <div className="space-y-3">
+                          {dayProjectsWithPhases.map(({ project, phases: projectPhases }) => {
                             const cfg = getProjectCfg(project.status, t)
                             const { start, end } = getProjectDateRange(project)
                             const isStart = start && isSameDay(selectedDay, start)
@@ -991,123 +1343,171 @@ export function CalendarModule() {
                                 className={`rounded-lg border border-l-4 p-3 ${cfg.border}`}
                                 style={{ backgroundColor: cfg.bg }}
                               >
-                                <div className="flex items-start justify-between gap-2">
-                                  <div className="flex-1 min-w-0">
-                                    <div className="flex items-center gap-2">
-                                      <FolderKanban className="h-4 w-4 shrink-0" style={{ color: cfg.text }} />
-                                      <span className="text-base font-bold truncate" style={{ color: cfg.text }}>
-                                        {poLabel ? `PO ${poLabel}` : project.name}
-                                      </span>
-                                    </div>
-                                    <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1.5 ml-6">
-                                      <Badge variant="secondary" className={`text-[10px] ${cfg.className}`}>
-                                        {cfg.label}
-                                      </Badge>
-                                      {project.contractor?.name && (
-                                        <span className="text-xs font-medium text-foreground">
-                                          {project.contractor.name}
-                                        </span>
-                                      )}
-                                    </div>
-                                    {poLabel && (
-                                      <div className="mt-1 ml-6 text-[11px] text-muted-foreground truncate">
-                                        {project.name} · {project.client.name}
-                                      </div>
-                                    )}
-                                    {!poLabel && (
-                                      <div className="mt-1 ml-6 text-[11px] text-muted-foreground">
-                                        {project.client.name}
-                                      </div>
-                                    )}
-                                    <div className="flex items-center gap-2 mt-1 ml-6">
-                                      {isSame && (
-                                        <span className="text-[10px] font-medium" style={{ color: cfg.text }}>
-                                          {t('calendar.project.sameDay')}
-                                        </span>
-                                      )}
-                                      {isStart && !isEnd && (
-                                        <span className="text-[10px] font-medium" style={{ color: cfg.text }}>
-                                          {t('calendar.project.startDate')}
-                                        </span>
-                                      )}
-                                      {isEnd && !isStart && (
-                                        <span className="text-[10px] font-medium" style={{ color: cfg.text }}>
-                                          {t('calendar.project.endDate')}
-                                        </span>
-                                      )}
-                                      {!isStart && !isEnd && (
-                                        <span className="text-[10px] text-muted-foreground">
-                                          {t('calendar.project.range', {
-                                            start: formatDateShort(project.startDate, dateLocale),
-                                            end: formatDateShort(project.endDate, dateLocale),
-                                          })}
-                                        </span>
-                                      )}
-                                    </div>
-                                    <div className="mt-3 ml-6 space-y-2 rounded-md border bg-background/70 p-2">
-                                      <div className="flex flex-wrap items-center gap-2">
-                                        <Button
-                                          type="button"
-                                          variant="outline"
-                                          size="sm"
-                                          className="h-8 px-2 text-xs"
-                                          onClick={() => moveProjectByDays(project, -1)}
-                                          disabled={updateProjectDatesMutation.isPending}
+                                {/* Project header */}
+                                <div className="flex items-center gap-2">
+                                  <FolderKanban className="h-4 w-4 shrink-0" style={{ color: cfg.text }} />
+                                  <span className="text-base font-bold truncate" style={{ color: cfg.text }}>
+                                    {poLabel ? `PO ${poLabel}` : project.name}
+                                  </span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1.5 ml-6">
+                                  <Badge variant="secondary" className={`text-[10px] ${cfg.className}`}>
+                                    {cfg.label}
+                                  </Badge>
+                                  {project.contractor?.name && (
+                                    <span className="text-xs font-medium text-foreground">
+                                      {project.contractor.name}
+                                    </span>
+                                  )}
+                                </div>
+                                {poLabel && (
+                                  <div className="mt-1 ml-6 text-[11px] text-muted-foreground truncate">
+                                    {project.name} · {project.client.name}
+                                  </div>
+                                )}
+                                {!poLabel && (
+                                  <div className="mt-1 ml-6 text-[11px] text-muted-foreground">
+                                    {project.client.name}
+                                  </div>
+                                )}
+                                <div className="flex items-center gap-2 mt-1 ml-6">
+                                  {isSame && (
+                                    <span className="text-[10px] font-medium" style={{ color: cfg.text }}>
+                                      {t('calendar.project.sameDay')}
+                                    </span>
+                                  )}
+                                  {isStart && !isEnd && (
+                                    <span className="text-[10px] font-medium" style={{ color: cfg.text }}>
+                                      {t('calendar.project.startDate')}
+                                    </span>
+                                  )}
+                                  {isEnd && !isStart && (
+                                    <span className="text-[10px] font-medium" style={{ color: cfg.text }}>
+                                      {t('calendar.project.endDate')}
+                                    </span>
+                                  )}
+                                  {!isStart && !isEnd && (
+                                    <span className="text-[10px] text-muted-foreground">
+                                      {t('calendar.project.range', {
+                                        start: formatDateShort(project.startDate, dateLocale),
+                                        end: formatDateShort(project.endDate, dateLocale),
+                                      })}
+                                    </span>
+                                  )}
+                                </div>
+
+                                {/* Phases on this day for this project */}
+                                {projectPhases.length > 0 && (
+                                  <div className="mt-3 ml-6 space-y-1">
+                                    <p className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">
+                                      <Layers className="inline h-3 w-3 mr-1 -mt-px" />
+                                      Fases hoy
+                                    </p>
+                                    {projectPhases.map((phase) => {
+                                      const color = PROJECT_PHASE_COLOR_CLASS[phase.phaseType.color] || PROJECT_PHASE_COLOR_CLASS.teal
+                                      const { start: ps, end: pe } = getPhaseDateRange(phase)
+                                      const phaseIsStart = ps && isSameDay(selectedDay, ps)
+                                      const phaseIsEnd = pe && isSameDay(selectedDay, pe)
+                                      return (
+                                        <button
+                                          key={phase.id}
+                                          className={`w-full rounded-md border-l-2 px-2 py-1.5 text-left transition-colors hover:opacity-80 ${color.border}`}
+                                          style={{ backgroundColor: `${color.bg}cc` }}
+                                          onClick={() => { closeDaySheet(); setTimeout(() => openPhasePanel({ ...phase, project }), 250) }}
                                         >
-                                          <ChevronLeft className="mr-1 h-3.5 w-3.5" />
-                                          {t('calendar.project.moveBack')}
-                                        </Button>
-                                        <Button
-                                          type="button"
-                                          variant="outline"
-                                          size="sm"
-                                          className="h-8 px-2 text-xs"
-                                          onClick={() => moveProjectByDays(project, 1)}
-                                          disabled={updateProjectDatesMutation.isPending}
-                                        >
-                                          {t('calendar.project.moveForward')}
-                                          <ChevronRight className="ml-1 h-3.5 w-3.5" />
-                                        </Button>
-                                        <Button
-                                          type="button"
-                                          variant="outline"
-                                          size="sm"
-                                          className="h-8 px-2 text-xs"
-                                          onClick={() => {
-                                            setMovingProject({
-                                              projectId: project.id,
-                                              sourceDate: format(selectedDay, 'yyyy-MM-dd'),
-                                            })
-                                            closeDaySheet()
-                                          }}
-                                          disabled={updateProjectDatesMutation.isPending}
-                                        >
-                                          {t('calendar.project.moveToDay')}
-                                        </Button>
-                                      </div>
-                                      <div className="grid gap-2 sm:grid-cols-2">
-                                        <label className="space-y-1 text-[11px] font-medium text-muted-foreground">
-                                          {t('calendar.project.editStart')}
-                                          <input
-                                            type="date"
-                                            value={getProjectRangeDateKeys(project).startDate}
-                                            onChange={(event) => updateProjectDateField(project, 'startDate', event.target.value)}
-                                            disabled={updateProjectDatesMutation.isPending}
-                                            className="h-8 w-full rounded-md border bg-background px-2 text-xs text-foreground"
-                                          />
-                                        </label>
-                                        <label className="space-y-1 text-[11px] font-medium text-muted-foreground">
-                                          {t('calendar.project.editEnd')}
-                                          <input
-                                            type="date"
-                                            value={getProjectRangeDateKeys(project).endDate}
-                                            onChange={(event) => updateProjectDateField(project, 'endDate', event.target.value)}
-                                            disabled={updateProjectDatesMutation.isPending}
-                                            className="h-8 w-full rounded-md border bg-background px-2 text-xs text-foreground"
-                                          />
-                                        </label>
-                                      </div>
-                                    </div>
+                                          <div className="flex items-center justify-between gap-2">
+                                            <div className="flex items-center gap-1.5 min-w-0">
+                                              <Layers className="h-3 w-3 shrink-0" style={{ color: color.text }} />
+                                              <span className="text-xs font-semibold truncate" style={{ color: color.text }}>
+                                                {phase.phaseType.name}
+                                              </span>
+                                              <Badge variant="secondary" className={`text-[10px] px-1 py-0 shrink-0 ${getPhaseStatusClass(phase.status)}`}>
+                                                {getPhaseStatusLabel(phase.status)}
+                                              </Badge>
+                                            </div>
+                                            <span className="text-[10px] text-muted-foreground shrink-0">
+                                              {phaseIsStart && phaseIsEnd ? 'Hoy' : phaseIsStart ? 'Inicio' : phaseIsEnd ? 'Fin' : `${formatDateShort(phase.startDate, dateLocale)}–${formatDateShort(phase.endDate, dateLocale)}`}
+                                            </span>
+                                          </div>
+                                        </button>
+                                      )
+                                    })}
+                                  </div>
+                                )}
+
+                                {/* Project actions */}
+                                <div className="mt-3 ml-6 space-y-2 rounded-md border bg-background/70 p-2">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <Button
+                                      type="button"
+                                      variant="default"
+                                      size="sm"
+                                      className="h-8 px-2 text-xs"
+                                      onClick={() => openProjectFromCalendar(project.id)}
+                                    >
+                                      <FolderKanban className="mr-1 h-3.5 w-3.5" />
+                                      {t('calendar.project.openProject')}
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-8 px-2 text-xs"
+                                      onClick={() => moveProjectByDays(project, -1)}
+                                      disabled={updateProjectDatesMutation.isPending}
+                                    >
+                                      <ChevronLeft className="mr-1 h-3.5 w-3.5" />
+                                      {t('calendar.project.moveBack')}
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-8 px-2 text-xs"
+                                      onClick={() => moveProjectByDays(project, 1)}
+                                      disabled={updateProjectDatesMutation.isPending}
+                                    >
+                                      {t('calendar.project.moveForward')}
+                                      <ChevronRight className="ml-1 h-3.5 w-3.5" />
+                                    </Button>
+                                    <Button
+                                      type="button"
+                                      variant="outline"
+                                      size="sm"
+                                      className="h-8 px-2 text-xs"
+                                      onClick={() => {
+                                        setMovingProject({
+                                          projectId: project.id,
+                                          sourceDate: format(selectedDay, 'yyyy-MM-dd'),
+                                        })
+                                        closeDaySheet()
+                                      }}
+                                      disabled={updateProjectDatesMutation.isPending}
+                                    >
+                                      {t('calendar.project.moveToDay')}
+                                    </Button>
+                                  </div>
+                                  <div className="grid gap-2 sm:grid-cols-2">
+                                    <label className="space-y-1 text-[11px] font-medium text-muted-foreground">
+                                      {t('calendar.project.editStart')}
+                                      <input
+                                        type="date"
+                                        value={getProjectRangeDateKeys(project).startDate}
+                                        onChange={(event) => updateProjectDateField(project, 'startDate', event.target.value)}
+                                        disabled={updateProjectDatesMutation.isPending}
+                                        className="h-8 w-full rounded-md border bg-background px-2 text-xs text-foreground"
+                                      />
+                                    </label>
+                                    <label className="space-y-1 text-[11px] font-medium text-muted-foreground">
+                                      {t('calendar.project.editEnd')}
+                                      <input
+                                        type="date"
+                                        value={getProjectRangeDateKeys(project).endDate}
+                                        onChange={(event) => updateProjectDateField(project, 'endDate', event.target.value)}
+                                        disabled={updateProjectDatesMutation.isPending}
+                                        className="h-8 w-full rounded-md border bg-background px-2 text-xs text-foreground"
+                                      />
+                                    </label>
                                   </div>
                                 </div>
                               </div>
@@ -1288,11 +1688,197 @@ export function CalendarModule() {
         title={t('tasks.delete.title')}
         description={t('calendar.deleteDescription', { title: selectedTask?.title ?? '' })}
       />
+
+      {/* ─── Phase Detail Panel ─── */}
+      <Sheet open={phasePanelOpen} onOpenChange={setPhasePanelOpen}>
+        <SheetContent className="sm:max-w-lg p-0 flex flex-col h-full">
+          {selectedPhase && (() => {
+            const phase = selectedPhase
+            const project = phase.project
+            const color = PROJECT_PHASE_COLOR_CLASS[phase.phaseType.color] || PROJECT_PHASE_COLOR_CLASS.teal
+            const phaseProjectTasks = tasks.filter((t) => t.projectId === phase.projectId)
+            return (
+              <>
+                {/* Panel header */}
+                <div className="p-5 pb-4 shrink-0" style={{ backgroundColor: `${color.bg}cc`, borderBottom: `2px solid ${color.text}25` }}>
+                  <SheetHeader>
+                    <div className="flex items-start gap-3">
+                      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border" style={{ backgroundColor: `${color.text}15`, borderColor: `${color.text}30` }}>
+                        <Layers className="h-5 w-5" style={{ color: color.text }} />
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <SheetTitle className="text-left text-base leading-tight" style={{ color: color.text }}>
+                          {phase.phaseType.name}
+                        </SheetTitle>
+                        {project && (
+                          <div className="mt-0.5 text-sm font-medium text-foreground truncate">
+                            {project.poNumber ? `PO ${project.poNumber} · ` : ''}{project.name}
+                          </div>
+                        )}
+                        {project?.client && (
+                          <div className="text-xs text-muted-foreground">{project.client.name}</div>
+                        )}
+                      </div>
+                    </div>
+                  </SheetHeader>
+                  <div className="mt-3 flex flex-wrap items-center gap-2">
+                    <Badge variant="secondary" className={`text-xs ${getPhaseStatusClass(phase.status)}`}>
+                      {getPhaseStatusLabel(phase.status)}
+                    </Badge>
+                    <span className="text-xs text-muted-foreground">
+                      {formatDateShort(phase.startDate, dateLocale)} → {formatDateShort(phase.endDate, dateLocale)}
+                    </span>
+                    {project && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-6 px-2 text-[11px] ml-auto bg-background/70"
+                        onClick={() => { closePhasePanel(); openProject(project.id) }}
+                      >
+                        <FolderKanban className="mr-1 h-3 w-3" />
+                        Abrir proyecto
+                      </Button>
+                    )}
+                  </div>
+                </div>
+
+                <ScrollArea className="flex-1 px-5 pb-6">
+                  <div className="space-y-6 pt-5">
+
+                    {/* Phase controls */}
+                    <div className="space-y-2">
+                      <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Controles de fase</p>
+                      <div className="rounded-md border p-3 space-y-3">
+                        <div className="grid gap-2 sm:grid-cols-2">
+                          <label className="space-y-1 text-[11px] font-medium text-muted-foreground">
+                            {t('calendar.project.editStart')}
+                            <input
+                              type="date"
+                              value={phase.startDate}
+                              onChange={(e) => updatePhaseDateField(phase, 'startDate', e.target.value)}
+                              disabled={updatePhaseMutation.isPending}
+                              className="h-8 w-full rounded-md border bg-background px-2 text-xs text-foreground"
+                            />
+                          </label>
+                          <label className="space-y-1 text-[11px] font-medium text-muted-foreground">
+                            {t('calendar.project.editEnd')}
+                            <input
+                              type="date"
+                              value={phase.endDate}
+                              onChange={(e) => updatePhaseDateField(phase, 'endDate', e.target.value)}
+                              disabled={updatePhaseMutation.isPending}
+                              className="h-8 w-full rounded-md border bg-background px-2 text-xs text-foreground"
+                            />
+                          </label>
+                        </div>
+                        <Select
+                          value={phase.status}
+                          onValueChange={(status) => updatePhaseMutation.mutate({ phase, data: { status } })}
+                        >
+                          <SelectTrigger className="h-8 text-xs">
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="pending">Pendiente</SelectItem>
+                            <SelectItem value="in_progress">En progreso</SelectItem>
+                            <SelectItem value="completed">Completada</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                    </div>
+
+                    {/* Project tasks */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <ListTodo className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Tareas del proyecto</p>
+                        <Badge variant="secondary" className="text-[10px] px-1.5 py-0">{phaseProjectTasks.length}</Badge>
+                      </div>
+                      {phaseProjectTasks.length === 0 ? (
+                        <div className="rounded-md border border-dashed p-4 text-center">
+                          <ListTodo className="mx-auto h-6 w-6 text-muted-foreground/30 mb-2" />
+                          <p className="text-xs text-muted-foreground">Sin tareas para este proyecto</p>
+                        </div>
+                      ) : (
+                        <div className="space-y-1.5">
+                          {phaseProjectTasks.map((task) => {
+                            const cfg = getTaskCfg(task.status, t)
+                            const isCompleted = task.status === 'completed'
+                            return (
+                              <div key={task.id} className="flex items-start gap-2.5 rounded-md border px-3 py-2 transition-colors hover:bg-muted/30">
+                                <button
+                                  className="mt-0.5 shrink-0"
+                                  onClick={() => toggleTaskMutation.mutate({
+                                    id: task.id,
+                                    status: isCompleted ? 'pending' : 'completed',
+                                  })}
+                                >
+                                  {isCompleted
+                                    ? <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+                                    : <Circle className="h-4 w-4 text-muted-foreground" />
+                                  }
+                                </button>
+                                <div className="min-w-0 flex-1">
+                                  <p className={`text-sm font-medium leading-tight ${isCompleted ? 'line-through text-muted-foreground' : ''}`}>
+                                    {task.title}
+                                  </p>
+                                  {task.dueDate && (
+                                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                                      <CalendarDays className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
+                                      {formatDateShort(task.dueDate, dateLocale)}
+                                    </p>
+                                  )}
+                                </div>
+                                <Badge variant="secondary" className={`shrink-0 text-[10px] ${cfg.className}`}>
+                                  {cfg.label}
+                                </Badge>
+                              </div>
+                            )
+                          })}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Phase notes */}
+                    <div className="space-y-2">
+                      <div className="flex items-center gap-2">
+                        <StickyNote className="h-4 w-4 text-muted-foreground" />
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">Notas de fase</p>
+                      </div>
+                      <Textarea
+                        value={phaseNoteInput}
+                        onChange={(e) => setPhaseNoteInput(e.target.value)}
+                        placeholder="Agrega notas sobre esta fase: materiales pendientes, recordatorios, condiciones especiales..."
+                        rows={4}
+                        className="text-sm resize-none"
+                      />
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        onClick={() => updatePhaseMutation.mutate({ phase, data: { notes: phaseNoteInput } })}
+                        disabled={updatePhaseMutation.isPending || phaseNoteInput === (phase.notes || '')}
+                      >
+                        {updatePhaseMutation.isPending ? 'Guardando...' : 'Guardar notas'}
+                      </Button>
+                    </div>
+
+                  </div>
+                </ScrollArea>
+              </>
+            )
+          })()}
+        </SheetContent>
+      </Sheet>
     </div>
 
     {/* Drag Overlay */}
     <DragOverlay>
-      {draggedProject ? (
+      {draggedPhase ? (
+        <div className="rounded-sm border-l-2 border-primary bg-background px-1 py-0.5 text-left text-[10px] leading-tight font-bold opacity-90 shadow-lg sm:text-xs">
+          <Layers className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
+          {draggedPhase.phase.phaseType.name}
+        </div>
+      ) : draggedProject ? (
         <div className="rounded-sm border-l-2 px-1 py-0.5 text-left text-[10px] leading-tight font-bold sm:text-xs opacity-90 shadow-lg bg-background border-primary">
           <FolderKanban className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
           {draggedProject.project.poNumber?.trim() || draggedProject.project.name}

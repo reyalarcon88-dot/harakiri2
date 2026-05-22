@@ -16,6 +16,7 @@ import {
   Lock,
   LockOpen,
   ShieldAlert,
+  Download,
 } from 'lucide-react'
 import { Card, CardContent } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
@@ -158,6 +159,49 @@ function getStockBadgeClasses(current: number, min: number) {
   return 'text-emerald-700 dark:text-emerald-300 bg-emerald-50 dark:bg-emerald-500/12 border border-emerald-200 dark:border-emerald-500/30'
 }
 
+function formatShelfPath(shelfId: string | null, shelves: FlatShelf[]) {
+  if (!shelfId) return ''
+  const shelf = shelves.find((item) => item.id === shelfId)
+  return shelf ? `${shelf.name} / ${shelf.rackName} / ${shelf.warehouseName}` : ''
+}
+
+function buildProductExportRows(products: Product[], shelves: FlatShelf[]) {
+  return products.map((product) => ({
+    Code: product.code,
+    Name: product.name,
+    Family: product.family,
+    'Engineering Section': product.engineeringSection,
+    'Unit of Measure': product.unitOfMeasure,
+    'Unit Quantity': product.unitQuantity,
+    'Minimum Stock': product.minStock,
+    'Current Stock': product.currentStock,
+    'Total Shelf Stock': product._totalShelfStock,
+    'Preferred Location': formatShelfPath(product.preferredShelfId, shelves),
+    'Reference Price': product.referencePrice,
+    'Created At': product.createdAt,
+  }))
+}
+
+function buildLocationExportRows(products: Product[]) {
+  return products.flatMap((product) =>
+    product.shelfStocks.map((stock) => ({
+      Code: product.code,
+      Name: product.name,
+      Family: product.family,
+      Warehouse: stock.shelf.rack.warehouse.name,
+      Rack: stock.shelf.rack.name,
+      Shelf: stock.shelf.name,
+      Quantity: Number(stock.quantity),
+      Reserved: stock.isReserveShelf ? Number(stock.quantity) : Number(stock.reserveQuantity || 0),
+      Available: Number(stock.availableQuantity || 0),
+      'Full Shelf Reserved': stock.isReserveShelf ? 'Yes' : 'No',
+      'Reserve Minimum': Number(stock.reserveMinimum || 0),
+      'Reserve Notes': stock.reserveNotes || '',
+      'Preferred Location': product.preferredShelfId === stock.shelf.id ? 'Yes' : 'No',
+    }))
+  )
+}
+
 /* ─── Component ─────────────────────────────────────── */
 
 export function ProductsModule() {
@@ -196,7 +240,12 @@ export function ProductsModule() {
 
   const { data: warehouses = [] } = useQuery<WarehouseWithRacks[]>({
     queryKey: ['warehouses'],
-    queryFn: () => fetch('/api/warehouses').then((r) => r.json()),
+    queryFn: async () => {
+      const response = await fetch('/api/warehouses')
+      if (!response.ok) throw new Error(`Failed to fetch warehouses: ${response.status}`)
+      const data = await response.json()
+      return Array.isArray(data) ? data : []
+    },
   })
 
   const shelves = useMemo<FlatShelf[]>(
@@ -369,6 +418,65 @@ export function ProductsModule() {
     setExpandedRow((prev) => (prev === id ? null : id))
   }
 
+  const handleExportExcel = async () => {
+    try {
+      const [XLSX, allProductsResponse] = await Promise.all([
+        import('xlsx'),
+        fetch('/api/products'),
+      ])
+
+      if (!allProductsResponse.ok) {
+        throw new Error(t('common.errorGeneric'))
+      }
+
+      const allProducts = await allProductsResponse.json() as Product[]
+      const workbook = XLSX.utils.book_new()
+      const filteredProductRows = buildProductExportRows(filteredProducts, shelves)
+      const allProductRows = buildProductExportRows(allProducts, shelves)
+      const filteredLocationRows = buildLocationExportRows(filteredProducts)
+      const allLocationRows = buildLocationExportRows(allProducts)
+
+      const productColumns = [
+        { wch: 18 }, { wch: 42 }, { wch: 24 }, { wch: 22 },
+        { wch: 16 }, { wch: 14 }, { wch: 14 }, { wch: 14 },
+        { wch: 16 }, { wch: 42 }, { wch: 15 }, { wch: 24 },
+      ]
+      const locationColumns = [
+        { wch: 18 }, { wch: 42 }, { wch: 24 }, { wch: 22 },
+        { wch: 18 }, { wch: 18 }, { wch: 12 }, { wch: 12 },
+        { wch: 12 }, { wch: 18 }, { wch: 16 }, { wch: 32 },
+        { wch: 18 },
+      ]
+
+      const sheets = [
+        { name: 'Productos filtrados', rows: filteredProductRows, cols: productColumns },
+        { name: 'Todos los productos', rows: allProductRows, cols: productColumns },
+        { name: 'Ubicaciones filtradas', rows: filteredLocationRows, cols: locationColumns },
+        { name: 'Ubicaciones todas', rows: allLocationRows, cols: locationColumns },
+      ]
+
+      for (const sheet of sheets) {
+        const worksheet = XLSX.utils.json_to_sheet(sheet.rows)
+        worksheet['!cols'] = sheet.cols
+        if (sheet.rows.length > 0) {
+          worksheet['!autofilter'] = {
+            ref: XLSX.utils.encode_range({
+              s: { r: 0, c: 0 },
+              e: { r: sheet.rows.length, c: Object.keys(sheet.rows[0]).length - 1 },
+            }),
+          }
+        }
+        XLSX.utils.book_append_sheet(workbook, worksheet, sheet.name)
+      }
+
+      const safeDate = new Date().toISOString().slice(0, 10)
+      XLSX.writeFile(workbook, `RMC-Productos-Almacen-${safeDate}.xlsx`, { compression: true })
+    } catch (error) {
+      console.error('Products Excel export error:', error)
+      toast.error(t('products.exportError'))
+    }
+  }
+
 
   /* ── Render ── */
   return (
@@ -418,10 +526,16 @@ export function ProductsModule() {
             </Button>
           )}
         </div>
-        <Button onClick={() => { resetForm(); setAddDialogOpen(true) }} className="shrink-0">
-          <Plus className="mr-2 h-4 w-4" />
-          {t('products.button')}
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="outline" onClick={() => void handleExportExcel()} className="shrink-0">
+            <Download className="mr-2 h-4 w-4" />
+            {t('products.exportExcel')}
+          </Button>
+          <Button onClick={() => { resetForm(); setAddDialogOpen(true) }} className="shrink-0">
+            <Plus className="mr-2 h-4 w-4" />
+            {t('products.button')}
+          </Button>
+        </div>
       </div>
 
       {/* Table */}

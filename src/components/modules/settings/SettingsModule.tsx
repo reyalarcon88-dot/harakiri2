@@ -13,6 +13,7 @@ import {
   FileText,
   FolderKanban,
   HardHat,
+  Layers,
   Loader2,
   Package,
   Settings,
@@ -42,6 +43,7 @@ import { formatLocaleDate, formatLocaleInteger } from '@/lib/i18n/format'
 import { useDocumentViewerStore } from '@/stores/document-viewer'
 import { TemplatesManagement } from './TemplatesManagement'
 import { ExpenseCategoriesManagement } from './ExpenseCategoriesManagement'
+import { PhaseTypesManagement } from './PhaseTypesManagement'
 
 interface DbStats {
   warehouses: number
@@ -59,6 +61,8 @@ interface DbStats {
   dispatches: number
   transfers: number
   tasks: number
+  phaseTypes: number
+  projectPhases: number
   templates: number
   pendingPurchases: number
   lowStockProducts: number
@@ -255,6 +259,8 @@ export function SettingsModule() {
         { key: 'dispatches', label: t('settings.stats.dispatches'), value: stats.dispatches, icon: ArrowRightLeft, color: 'text-teal-600' },
         { key: 'transfers', label: t('settings.stats.transfers'), value: stats.transfers, icon: ArrowRightLeft, color: 'text-teal-600' },
         { key: 'tasks', label: t('settings.stats.tasks'), value: stats.tasks, icon: ClipboardList, color: 'text-orange-600' },
+        { key: 'phaseTypes', label: 'Tipos de fases', value: stats.phaseTypes, icon: Layers, color: 'text-teal-600' },
+        { key: 'projectPhases', label: 'Fases de proyectos', value: stats.projectPhases, icon: Layers, color: 'text-teal-600' },
         { key: 'templates', label: t('settings.stats.templates'), value: stats.templates, icon: FileText, color: 'text-pink-600' },
       ]
     : []
@@ -529,6 +535,8 @@ export function SettingsModule() {
       </div>
 
       <TemplatesManagement />
+
+      <PhaseTypesManagement />
 
       <ExpenseCategoriesManagement />
 

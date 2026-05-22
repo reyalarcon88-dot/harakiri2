@@ -116,6 +116,14 @@ export async function POST() {
       db.contractors.create({ data: { name: 'HidroServicios Cubanos', contactName: 'Ileana Castro', email: 'info@hidroservicios.cu', phone: '+53 5555-2003', specialty: 'Plomería y fontanería' } }),
     ])
 
+    const phaseTypes = await Promise.all([
+      db.projectPhaseTypes.create({ data: { name: 'Removal', color: 'rose', sortOrder: 10 } }),
+      db.projectPhaseTypes.create({ data: { name: 'Concrete', color: 'amber', sortOrder: 20 } }),
+      db.projectPhaseTypes.create({ data: { name: 'Prefab', color: 'sky', sortOrder: 30 } }),
+      db.projectPhaseTypes.create({ data: { name: 'Install', color: 'emerald', sortOrder: 40 } }),
+      db.projectPhaseTypes.create({ data: { name: 'Build', color: 'violet', sortOrder: 50 } }),
+    ])
+
     // ── 7. Purchases ──
     const purchases = await Promise.all([
       db.purchases.create({ data: { purchaseCode: 'COMP-2024-001', supplierId: suppliers[0].id, purchaseDate: '2024-11-15', notes: 'Compra mensual de cemento', status: 'received' } }),
@@ -149,6 +157,13 @@ export async function POST() {
       db.projects.create({ data: { name: 'Residencial Miramar Torre A', clientId: clients[0].id, contractorId: contractors[0].id, projectDate: '2024-10-01', status: 'in_progress', budget: 850000 } }),
       db.projects.create({ data: { name: 'Hotel Paradiso Renovación', clientId: clients[2].id, contractorId: contractors[1].id, projectDate: '2024-11-15', status: 'in_progress', budget: 1200000 } }),
       db.projects.create({ data: { name: 'Centro Comercial del Sol', clientId: clients[1].id, contractorId: contractors[0].id, projectDate: '2025-01-10', status: 'planned', budget: 2500000 } }),
+    ])
+
+    await Promise.all([
+      db.projectPhases.create({ data: { projectId: projects[0].id, phaseTypeId: phaseTypes[0].id, startDate: '2024-10-01', endDate: '2024-10-02', sortOrder: 0 } }),
+      db.projectPhases.create({ data: { projectId: projects[0].id, phaseTypeId: phaseTypes[1].id, startDate: '2024-10-03', endDate: '2024-10-05', sortOrder: 1 } }),
+      db.projectPhases.create({ data: { projectId: projects[0].id, phaseTypeId: phaseTypes[3].id, startDate: '2024-10-06', endDate: '2024-10-08', status: 'in_progress', sortOrder: 2 } }),
+      db.projectPhases.create({ data: { projectId: projects[2].id, phaseTypeId: phaseTypes[4].id, startDate: '2025-01-10', endDate: '2025-01-12', sortOrder: 0 } }),
     ])
 
     // ── 10. Project Materials ──
@@ -248,6 +263,8 @@ export async function POST() {
       dispatches: await db.dispatches.count(),
       transfers: await db.transfers.count(),
       tasks: await db.tasks.count(),
+      phaseTypes: await db.projectPhaseTypes.count(),
+      projectPhases: await db.projectPhases.count(),
       templates: await db.materialTemplates.count(),
     }
 

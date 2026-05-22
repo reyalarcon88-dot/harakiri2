@@ -17,16 +17,25 @@ function todayDateKey() {
   return local.toISOString().slice(0, 10)
 }
 
+function normalizeAssigneeType(value: unknown): 'contractor' | 'installer' | null {
+  if (value === 'contractor' || value === 'installer') return value
+  return null
+}
+
 export async function GET(request: NextRequest) {
   try {
     const { searchParams } = new URL(request.url)
     const status = searchParams.get('status')
     const projectId = searchParams.get('projectId')
+    const assigneeType = searchParams.get('assigneeType')
+    const assigneeId = searchParams.get('assigneeId')
 
     const tasks = await db.tasks.findMany({
       where: {
         ...(status ? { status } : {}),
         ...(projectId ? { projectId } : {}),
+        ...(assigneeType ? { assigneeType } : {}),
+        ...(assigneeId ? { assigneeId } : {}),
       },
       include: {
         project: { select: taskProjectSelect },
@@ -47,11 +56,14 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json()
-    const { title, description, dueDate, alarmDate, projectId, status } = body
+    const { title, description, dueDate, alarmDate, projectId, status, assigneeType, assigneeId } = body
 
     if (!title) {
       return NextResponse.json({ error: 'El titulo es obligatorio' }, { status: 400 })
     }
+
+    const normalizedAssigneeType = normalizeAssigneeType(assigneeType)
+    const normalizedAssigneeId = normalizedAssigneeType ? nullableString(assigneeId) : null
 
     const taskStatus = status || 'pending'
     const task = await db.tasks.create({
@@ -63,6 +75,8 @@ export async function POST(request: NextRequest) {
         projectId: nullableString(projectId),
         status: taskStatus,
         completedAt: taskStatus === 'completed' ? todayDateKey() : null,
+        assigneeType: normalizedAssigneeType,
+        assigneeId: normalizedAssigneeId,
       },
       include: {
         project: { select: taskProjectSelect },

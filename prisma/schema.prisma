@@ -49,6 +49,9 @@ model Shelves {
   returnItemsTo       ReturnItems[] @relation("ReturnTo")
   transfersFrom       Transfers[] @relation("TransferFrom")
   transfersTo         Transfers[] @relation("TransferTo")
+  currentTools        InventoryTools[] @relation("CurrentToolShelf")
+  toolMovementsFrom   ToolMovements[] @relation("ToolMovementFromShelf")
+  toolMovementsTo     ToolMovements[] @relation("ToolMovementToShelf")
   preferredByProducts Products[] @relation("ProductPreferredShelf")
 
   @@map("shelves")
@@ -139,6 +142,10 @@ model Contractors {
   createdAt   DateTime @default(now()) @map("created_at")
 
   projects Projects[]
+  currentTools      InventoryTools[] @relation("CurrentToolContractor")
+  toolMovementsFrom ToolMovements[] @relation("ToolMovementFromContractor")
+  toolMovementsTo   ToolMovements[] @relation("ToolMovementToContractor")
+  toolAssignments   ToolAssignments[] @relation("ToolAssignmentContractor")
 
   @@map("contractors")
 }
@@ -235,8 +242,44 @@ model Projects {
   purchases           Purchases[]
   tasks               Tasks[]
   expenses            ProjectExpenses[]
+  phases              ProjectPhases[]
+  projectNotes        ProjectNotes[]
 
   @@map("projects")
+}
+
+model ProjectPhaseTypes {
+  id        String   @id @default(cuid())
+  name      String   @unique
+  color     String   @default("teal")
+  sortOrder Int      @default(0) @map("sort_order")
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  phases ProjectPhases[]
+
+  @@map("project_phase_types")
+}
+
+model ProjectPhases {
+  id          String   @id @default(cuid())
+  projectId   String   @map("project_id")
+  phaseTypeId String   @map("phase_type_id")
+  startDate   String   @map("start_date")
+  endDate     String   @map("end_date")
+  status      String   @default("pending")
+  sortOrder   Int      @default(0) @map("sort_order")
+  completedAt String?  @map("completed_at")
+  notes       String   @default("") @map("notes")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  project   Projects          @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  phaseType ProjectPhaseTypes @relation(fields: [phaseTypeId], references: [id])
+
+  @@index([projectId, startDate])
+  @@map("project_phases")
 }
 
 model ProjectMaterials {
@@ -340,6 +383,135 @@ model Transfers {
   @@map("transfers")
 }
 
+model ToolInstallers {
+  id          String   @id @default(cuid())
+  name        String
+  phone       String   @default("")
+  email       String   @default("")
+  company     String   @default("")
+  role        String   @default("installer")
+  notes       String   @default("")
+  active      Boolean  @default(true)
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  currentTools      InventoryTools[] @relation("CurrentToolInstaller")
+  toolMovementsFrom ToolMovements[] @relation("ToolMovementFromInstaller")
+  toolMovementsTo   ToolMovements[] @relation("ToolMovementToInstaller")
+  toolAssignments   ToolAssignments[] @relation("ToolAssignmentInstaller")
+
+  @@map("tool_installers")
+}
+
+model InventoryTools {
+  id                  String   @id @default(cuid())
+  code                String   @unique
+  serial              String   @default("")
+  category            String
+  name                String
+  brand               String   @default("")
+  model               String   @default("")
+  trackingType        String   @default("serialized") @map("tracking_type")
+  totalQuantity       Int      @default(1) @map("total_quantity")
+  availableQuantity   Int      @default(1) @map("available_quantity")
+  assignedQuantity    Int      @default(0) @map("assigned_quantity")
+  status              String   @default("available")
+  condition           String   @default("good")
+  notes               String   @default("")
+  currentLocationType String   @default("warehouse") @map("current_location_type")
+  currentShelfId      String?  @map("current_shelf_id")
+  currentContractorId String?  @map("current_contractor_id")
+  currentInstallerId  String?  @map("current_installer_id")
+  createdAt           DateTime @default(now()) @map("created_at")
+  updatedAt           DateTime @updatedAt @map("updated_at")
+
+  currentShelf      Shelves?         @relation("CurrentToolShelf", fields: [currentShelfId], references: [id], onDelete: SetNull)
+  currentContractor Contractors?     @relation("CurrentToolContractor", fields: [currentContractorId], references: [id], onDelete: SetNull)
+  currentInstaller  ToolInstallers?  @relation("CurrentToolInstaller", fields: [currentInstallerId], references: [id], onDelete: SetNull)
+  movements         ToolMovements[]
+  kitItems          ToolKitItems[]
+  assignments       ToolAssignments[]
+
+  @@map("inventory_tools")
+}
+
+model ToolAssignments {
+  id           String   @id @default(cuid())
+  toolId       String   @map("tool_id")
+  holderType   String   @map("holder_type")
+  contractorId String?  @map("contractor_id")
+  installerId  String?  @map("installer_id")
+  quantity     Int      @default(0)
+  createdAt    DateTime @default(now()) @map("created_at")
+  updatedAt    DateTime @updatedAt @map("updated_at")
+
+  tool       InventoryTools @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  contractor Contractors?   @relation("ToolAssignmentContractor", fields: [contractorId], references: [id], onDelete: Cascade)
+  installer  ToolInstallers? @relation("ToolAssignmentInstaller", fields: [installerId], references: [id], onDelete: Cascade)
+
+  @@unique([toolId, holderType, contractorId, installerId])
+  @@index([toolId])
+  @@index([contractorId])
+  @@index([installerId])
+  @@map("tool_assignments")
+}
+
+model ToolKits {
+  id        String   @id @default(cuid())
+  code      String   @unique
+  name      String
+  notes     String   @default("")
+  status    String   @default("active")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  items ToolKitItems[]
+
+  @@map("tool_kits")
+}
+
+model ToolKitItems {
+  id        String   @id @default(cuid())
+  kitId     String   @map("kit_id")
+  toolId    String   @unique @map("tool_id")
+  quantity  Int      @default(1)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  kit  ToolKits       @relation(fields: [kitId], references: [id], onDelete: Cascade)
+  tool InventoryTools @relation(fields: [toolId], references: [id], onDelete: Cascade)
+
+  @@map("tool_kit_items")
+}
+
+model ToolMovements {
+  id               String   @id @default(cuid())
+  toolId           String   @map("tool_id")
+  movementType     String   @map("movement_type")
+  movementDate     String   @map("movement_date")
+  fromType         String   @default("") @map("from_type")
+  toType           String   @default("") @map("to_type")
+  fromShelfId      String?  @map("from_shelf_id")
+  toShelfId        String?  @map("to_shelf_id")
+  fromContractorId String?  @map("from_contractor_id")
+  toContractorId   String?  @map("to_contractor_id")
+  fromInstallerId  String?  @map("from_installer_id")
+  toInstallerId    String?  @map("to_installer_id")
+  condition        String   @default("")
+  quantity         Int      @default(1)
+  notes            String   @default("")
+  createdAt        DateTime @default(now()) @map("created_at")
+
+  tool           InventoryTools  @relation(fields: [toolId], references: [id], onDelete: Cascade)
+  fromShelf      Shelves?        @relation("ToolMovementFromShelf", fields: [fromShelfId], references: [id], onDelete: SetNull)
+  toShelf        Shelves?        @relation("ToolMovementToShelf", fields: [toShelfId], references: [id], onDelete: SetNull)
+  fromContractor Contractors?    @relation("ToolMovementFromContractor", fields: [fromContractorId], references: [id], onDelete: SetNull)
+  toContractor   Contractors?    @relation("ToolMovementToContractor", fields: [toContractorId], references: [id], onDelete: SetNull)
+  fromInstaller  ToolInstallers? @relation("ToolMovementFromInstaller", fields: [fromInstallerId], references: [id], onDelete: SetNull)
+  toInstaller    ToolInstallers? @relation("ToolMovementToInstaller", fields: [toInstallerId], references: [id], onDelete: SetNull)
+
+  @@map("tool_movements")
+}
+
 model MaterialTemplates {
   id          String   @id @default(cuid())
   name        String
@@ -387,6 +559,7 @@ model RecepcionItem {
 model ProjectDocuments {
   id          String   @id @default(cuid())
   projectId   String   @map("project_id")
+  noteId      String?  @map("note_id")
   fileName    String   @map("file_name")
   fileUrl     String   @map("file_url")
   fileSize    Int      @default(0) @map("file_size")
@@ -394,9 +567,25 @@ model ProjectDocuments {
   category    String   @default("other") @map("category")
   uploadedAt  DateTime @default(now()) @map("uploaded_at")
 
-  project Projects @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  project Projects     @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  note    ProjectNotes? @relation(fields: [noteId], references: [id], onDelete: Cascade)
 
   @@map("project_documents")
+}
+
+model ProjectNotes {
+  id          String   @id @default(cuid())
+  projectId   String   @map("project_id")
+  authorType  String   @default("admin") @map("author_type")
+  authorId    String?  @map("author_id")
+  body        String   @default("")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  project   Projects           @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  documents ProjectDocuments[]
+
+  @@index([projectId, createdAt])
+  @@map("project_notes")
 }
 
 model Tasks {
@@ -412,6 +601,8 @@ model Tasks {
   automationKey String?  @map("automation_key")
   autoGenerated Boolean  @default(false) @map("auto_generated")
   priority      Int      @default(2)
+  assigneeType  String?  @map("assignee_type")
+  assigneeId    String?  @map("assignee_id")
 
   project Projects? @relation(fields: [projectId], references: [id], onDelete: SetNull)
 

@@ -41,6 +41,11 @@ export async function GET(
   }
 }
 
+function normalizeAssigneeType(value: unknown): 'contractor' | 'installer' | null {
+  if (value === 'contractor' || value === 'installer') return value
+  return null
+}
+
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -48,7 +53,7 @@ export async function PUT(
   try {
     const { id } = await params
     const body = await request.json()
-    const { title, description, dueDate, alarmDate, projectId, status, completedAt } = body
+    const { title, description, dueDate, alarmDate, projectId, status, completedAt, assigneeType, assigneeId } = body
 
     const currentTask = await db.tasks.findUnique({
       where: { id },
@@ -70,6 +75,17 @@ export async function PUT(
                 : null,
           }
 
+    const assigneeData =
+      assigneeType === undefined && assigneeId === undefined
+        ? {}
+        : (() => {
+            const normalizedType = normalizeAssigneeType(assigneeType)
+            return {
+              assigneeType: normalizedType,
+              assigneeId: normalizedType ? nullableString(assigneeId) : null,
+            }
+          })()
+
     const task = await db.tasks.update({
       where: { id },
       data: {
@@ -80,6 +96,7 @@ export async function PUT(
         ...(projectId !== undefined && { projectId: nullableString(projectId) }),
         ...(status !== undefined && { status }),
         ...completionData,
+        ...assigneeData,
       },
       include: {
         project: { select: taskProjectSelect },

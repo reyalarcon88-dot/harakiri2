@@ -1317,15 +1317,15 @@ export function PurchasesModule() {
       <div className="space-y-5">
         {/* Header */}
         <div className={`sticky top-2 z-30 rounded-lg border bg-card/95 px-4 py-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/90 ${statusAccent.card}`}>
-          <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-center gap-3 min-w-0">
+          <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+            <div className="flex min-w-[260px] flex-1 items-center gap-3">
               <Button variant="ghost" size="sm" onClick={() => setSelectedPurchaseId(null)} className="shrink-0">
                 <ArrowLeft className="h-4 w-4 mr-1" /> {t('purchases.actions.back')}
               </Button>
               <Separator orientation="vertical" className="h-6 shrink-0" />
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="font-mono font-bold text-sm tracking-tight text-foreground">
+                  <span className="min-w-0 break-words font-mono text-sm font-bold tracking-tight text-foreground">
                     {selectedPurchase.poNumber ? `PO ${selectedPurchase.poNumber}` : t('purchases.common.noPo')}
                   </span>
                   <Badge variant="outline" className="font-mono text-xs shrink-0">
@@ -1333,13 +1333,13 @@ export function PurchasesModule() {
                   </Badge>
                   <PurchaseStatusBadge status={selectedPurchase.status} />
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
+                <p className="mt-0.5 min-w-0 break-words text-xs text-muted-foreground">
                   {selectedPurchase.supplier.name} · {formatShortDate(locale, selectedPurchase.createdAt)}
                 </p>
               </div>
             </div>
-            <div className="flex items-center gap-2 flex-wrap shrink-0">
-              <div className="relative w-full sm:w-64">
+            <div className="flex min-w-0 flex-1 flex-wrap items-center gap-2 xl:justify-end">
+              <div className="relative w-full sm:w-72 xl:w-80">
                 <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
                 <Input
                   value={purchaseItemSearch}
@@ -1383,10 +1383,10 @@ export function PurchasesModule() {
                   variant="outline"
                   size="sm"
                   onClick={() => openProject(selectedPurchase.project!.id)}
-                  className="gap-2 border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 hover:text-teal-800"
+                  className="max-w-full gap-2 border-teal-200 bg-teal-50 text-teal-700 hover:bg-teal-100 hover:text-teal-800 sm:max-w-[280px]"
                 >
-                  <FolderKanban className="h-4 w-4" />
-                  Project {selectedPurchase.project.name}
+                  <FolderKanban className="h-4 w-4 shrink-0" />
+                  <span className="truncate">Project {selectedPurchase.project.name}</span>
                 </Button>
               ) : null}
               <div className="flex items-center">

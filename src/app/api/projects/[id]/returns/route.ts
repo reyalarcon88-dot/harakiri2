@@ -2,6 +2,16 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { randomUUID } from 'crypto'
 import { decrementProjectDispatchQuantities } from '@/lib/server/project-dispatch'
+import type { Prisma } from '@prisma/client'
+
+const PARTIAL_REMNANT_CHANGE_TYPE = 'partial_remnant'
+
+class ReturnValidationError extends Error {
+  constructor(message: string) {
+    super(message)
+    this.name = 'ReturnValidationError'
+  }
+}
 
 // ── Raw row types from SQLite ──────────────────────────────────────────────────
 
@@ -75,6 +85,101 @@ function formatReturn(r: ReturnRow, items: ReturnType<typeof formatItem>[]) {
     status: r.status,
     items,
   }
+}
+
+function firstNumber(value: unknown) {
+  const match = String(value ?? '').match(/\d+(?:\.\d+)?/)
+  if (!match) return null
+  const numberValue = Number(match[0])
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
+function lastDimensionalNumber(value: unknown) {
+  const matches = String(value ?? '').match(/\d+(?:\.\d+)?/g)
+  if (!matches || matches.length === 0) return null
+  const numberValue = Number(matches[matches.length - 1])
+  return Number.isFinite(numberValue) ? numberValue : null
+}
+
+function detectOriginalSize(product: { unitQuantity: unknown; name: string; code: string }) {
+  const unitSize = firstNumber(product.unitQuantity)
+  if (unitSize && unitSize > 0) return unitSize
+  return lastDimensionalNumber(product.name) ?? lastDimensionalNumber(product.code)
+}
+
+function formatSize(value: number) {
+  return Number.isInteger(value) ? String(value) : String(value).replace(/\.?0+$/, '')
+}
+
+function replaceLastSizeToken(value: string, originalSize: number, remnantSize: number) {
+  const original = formatSize(originalSize)
+  const remnant = formatSize(remnantSize)
+  const escaped = original.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const dimensionPattern = new RegExp(`([xX])\\s*${escaped}(?=(?:['"]|\\b|\\s|$))`, 'g')
+
+  let lastMatch: RegExpExecArray | null = null
+  let match: RegExpExecArray | null
+  while ((match = dimensionPattern.exec(value))) {
+    lastMatch = match
+  }
+
+  if (lastMatch) {
+    const start = lastMatch.index
+    const end = start + lastMatch[0].length
+    return `${value.slice(0, start)}${lastMatch[1]}${remnant}${value.slice(end)}`
+  }
+
+  const trailingPattern = new RegExp(`${escaped}(?=(?:['"]|\\b|\\s|$))(?!.*${escaped})`)
+  if (trailingPattern.test(value)) return value.replace(trailingPattern, remnant)
+
+  return `${value} ${remnant}'`
+}
+
+async function resolvePartialRemnantProduct(
+  tx: Prisma.TransactionClient,
+  productIdDelivered: string,
+  partialRemnantSize: number,
+) {
+  const original = await tx.products.findUnique({
+    where: { id: productIdDelivered },
+  })
+
+  if (!original) {
+    throw new ReturnValidationError('Producto original no encontrado')
+  }
+
+  const originalSize = detectOriginalSize(original)
+  if (!originalSize || originalSize <= 0) {
+    throw new ReturnValidationError('No se pudo detectar el tamano original del producto')
+  }
+
+  if (!Number.isFinite(partialRemnantSize) || partialRemnantSize <= 0) {
+    throw new ReturnValidationError('El tamano devuelto debe ser mayor que 0')
+  }
+
+  if (partialRemnantSize >= originalSize) {
+    throw new ReturnValidationError('El tamano devuelto debe ser menor que el tamano original')
+  }
+
+  const remnantCode = replaceLastSizeToken(original.code, originalSize, partialRemnantSize)
+  const existing = await tx.products.findUnique({ where: { code: remnantCode } })
+  if (existing) return existing
+
+  return tx.products.create({
+    data: {
+      code: remnantCode,
+      name: replaceLastSizeToken(original.name, originalSize, partialRemnantSize),
+      family: original.family,
+      engineeringSection: original.engineeringSection,
+      color: original.color,
+      unitOfMeasure: 'pza',
+      unitQuantity: formatSize(partialRemnantSize),
+      minStock: original.minStock,
+      currentStock: 0,
+      referencePrice: original.referencePrice,
+      preferredShelfId: original.preferredShelfId,
+    },
+  })
 }
 
 async function fetchItems(returnId: string) {
@@ -160,13 +265,32 @@ export async function POST(
       for (const item of items) {
         const itemId = randomUUID()
         const productIdDelivered = String(item.productIdDelivered || item.productId)
-        const productIdReturned: string | null = item.productIdReturned || null
+        let productIdReturned: string | null = item.productIdReturned || null
         const quantityDelivered = Number(item.quantityDelivered ?? item.quantity ?? 0)
         const quantityReturned = Number(item.quantityReturned ?? quantityDelivered)
-        const changeType = item.changeType || 'full_return'
-        const specDel = item.specificationDelivered || ''
-        const specRet = item.specificationReturned || ''
+        const isPartialRemnant = item.isPartialRemnant === true || item.changeType === PARTIAL_REMNANT_CHANGE_TYPE
+        const changeType = isPartialRemnant ? PARTIAL_REMNANT_CHANGE_TYPE : (item.changeType || 'full_return')
+        let specDel = item.specificationDelivered || ''
+        let specRet = item.specificationReturned || ''
         const itemNotes = item.notes || ''
+
+        if (quantityDelivered <= 0 || quantityReturned <= 0) {
+          throw new ReturnValidationError('La cantidad devuelta debe ser mayor que 0')
+        }
+
+        if (isPartialRemnant) {
+          const partialRemnantSize = Number(item.partialRemnantSize)
+          const remnantProduct = await resolvePartialRemnantProduct(
+            tx,
+            productIdDelivered,
+            partialRemnantSize,
+          )
+          productIdReturned = remnantProduct.id
+          const originalProduct = await tx.products.findUnique({ where: { id: productIdDelivered } })
+          const originalSize = originalProduct ? detectOriginalSize(originalProduct) : null
+          specDel = specDel || (originalSize ? `${formatSize(originalSize)} pies` : '')
+          specRet = specRet || `${formatSize(partialRemnantSize)} pies`
+        }
 
         await tx.$executeRaw`
           INSERT INTO return_items (
@@ -191,7 +315,9 @@ export async function POST(
           await tx.recepcionItem.create({
             data: { productId: returnedProductId, quantity: quantityReturned, returnId },
           })
-          dispatchAdjustments.push({ productId: productIdDelivered, quantity: quantityDelivered })
+          if (changeType !== PARTIAL_REMNANT_CHANGE_TYPE) {
+            dispatchAdjustments.push({ productId: productIdDelivered, quantity: quantityDelivered })
+          }
         }
       }
 
@@ -207,6 +333,9 @@ export async function POST(
     return NextResponse.json(formatReturn(rows[0], await fetchItems(returnId)), { status: 201 })
   } catch (error) {
     console.error('[returns POST]', error)
+    if (error instanceof ReturnValidationError) {
+      return NextResponse.json({ error: error.message }, { status: 400 })
+    }
     return NextResponse.json({ error: 'Error al crear devolucion' }, { status: 500 })
   }
 }
@@ -250,9 +379,10 @@ export async function PATCH(
       product_id_returned: string | null
       quantity_delivered: number | bigint
       quantity_returned: number | bigint
+      change_type: string
     }
     const itemRows = await db.$queryRaw<RawItem[]>`
-      SELECT id, product_id_delivered, product_id_returned, quantity_delivered, quantity_returned
+      SELECT id, product_id_delivered, product_id_returned, quantity_delivered, quantity_returned, change_type
       FROM return_items WHERE return_id = ${returnId}
     `
 
@@ -292,10 +422,12 @@ export async function PATCH(
           })
         }
 
-        dispatchAdjustments.push({
-          productId: item.product_id_delivered,
-          quantity: Number(item.quantity_delivered),
-        })
+        if (item.change_type !== PARTIAL_REMNANT_CHANGE_TYPE) {
+          dispatchAdjustments.push({
+            productId: item.product_id_delivered,
+            quantity: Number(item.quantity_delivered),
+          })
+        }
       }
 
       await decrementProjectDispatchQuantities(tx, projectId, dispatchAdjustments)

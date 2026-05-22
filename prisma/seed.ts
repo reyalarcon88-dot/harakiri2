@@ -11,6 +11,7 @@ async function main() {
   await db.dispatches.deleteMany()
   await db.returnItems.deleteMany()
   await db.returns.deleteMany()
+  await db.projectPhases.deleteMany()
   await db.projectMaterials.deleteMany()
   await db.projects.deleteMany()
   await db.purchaseItems.deleteMany()
@@ -23,6 +24,16 @@ async function main() {
   await db.suppliers.deleteMany()
   await db.clients.deleteMany()
   await db.contractors.deleteMany()
+  await db.projectPhaseTypes.deleteMany()
+
+  const phaseTypes = await Promise.all([
+    db.projectPhaseTypes.create({ data: { name: 'Removal', color: 'rose', sortOrder: 10 } }),
+    db.projectPhaseTypes.create({ data: { name: 'Concrete', color: 'amber', sortOrder: 20 } }),
+    db.projectPhaseTypes.create({ data: { name: 'Prefab', color: 'sky', sortOrder: 30 } }),
+    db.projectPhaseTypes.create({ data: { name: 'Install', color: 'emerald', sortOrder: 40 } }),
+    db.projectPhaseTypes.create({ data: { name: 'Build', color: 'violet', sortOrder: 50 } }),
+  ])
+  const phaseType = (name: string) => phaseTypes.find((item) => item.name === name)!
 
   // ─── Warehouse ────────────────────────────────────────────────────────────
   const warehouse = await db.warehouse.create({
@@ -164,6 +175,14 @@ async function main() {
       startDate: '2026-04-20',
       status: 'planned',
       budget: 12000,
+      phases: {
+        create: [
+          { phaseTypeId: phaseType('Removal').id, startDate: '2026-04-20', endDate: '2026-04-20', sortOrder: 0 },
+          { phaseTypeId: phaseType('Concrete').id, startDate: '2026-04-21', endDate: '2026-04-22', sortOrder: 1 },
+          { phaseTypeId: phaseType('Prefab').id, startDate: '2026-04-23', endDate: '2026-04-24', sortOrder: 2 },
+          { phaseTypeId: phaseType('Install').id, startDate: '2026-04-25', endDate: '2026-04-25', sortOrder: 3 },
+        ],
+      },
       materials: {
         create: [
           { productId: p('ALU-SGU7').id,  plannedQuantity: 1   },

@@ -218,6 +218,10 @@ export async function GET(
         documents: {
           orderBy: { uploadedAt: 'desc' },
         },
+        phases: {
+          include: { phaseType: true },
+          orderBy: [{ startDate: 'asc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
+        },
       },
     })
 

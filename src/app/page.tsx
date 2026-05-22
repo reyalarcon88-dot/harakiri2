@@ -16,6 +16,7 @@ import { useNavigationStore } from '@/stores/navigation'
 import { DashboardModule } from '@/components/modules/dashboard/DashboardModule'
 import { WarehousesModule } from '@/components/modules/warehouses/WarehousesModule'
 import { ProductsModule } from '@/components/modules/products/ProductsModule'
+import { ToolsModule } from '@/components/modules/tools/ToolsModule'
 import { PurchasesModule } from '@/components/modules/purchases/PurchasesModule'
 import { ProjectsModule } from '@/components/modules/projects/ProjectsModule'
 import { RecepcionModule } from '@/components/modules/recepcion/RecepcionModule'
@@ -24,6 +25,7 @@ import { TransfersModule } from '@/components/modules/transfers/TransfersModule'
 import { SuppliersModule } from '@/components/modules/people/SuppliersModule'
 import { ClientsModule } from '@/components/modules/people/ClientsModule'
 import { ContractorsModule } from '@/components/modules/people/ContractorsModule'
+import { PersonnelModule } from '@/components/modules/personnel/PersonnelModule'
 import { TasksModule } from '@/components/modules/tasks/TasksModule'
 import { CalendarModule } from '@/components/modules/calendar/CalendarModule'
 import { ReportsModule } from '@/components/modules/reports/ReportsModule'
@@ -59,6 +61,7 @@ function AppContent() {
           {currentPage === 'dashboard' && <DashboardModule />}
           {currentPage === 'warehouses' && <WarehousesModule />}
           {currentPage === 'products' && <ProductsModule />}
+          {currentPage === 'tools' && <ToolsModule />}
           {currentPage === 'purchases' && <PurchasesModule />}
           {currentPage === 'recepcion' && <RecepcionModule />}
           {currentPage === 'returns' && <ReturnsModule />}
@@ -67,6 +70,7 @@ function AppContent() {
           {currentPage === 'suppliers' && <SuppliersModule />}
           {currentPage === 'clients' && <ClientsModule />}
           {currentPage === 'contractors' && <ContractorsModule />}
+          {currentPage === 'personnel' && <PersonnelModule />}
           {currentPage === 'tasks' && <TasksModule />}
           {currentPage === 'calendar' && <CalendarModule />}
           {currentPage === 'reports' && <ReportsModule />}

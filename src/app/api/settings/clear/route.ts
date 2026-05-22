@@ -4,10 +4,16 @@ import { db } from '@/lib/db'
 export async function POST() {
   try {
     // Delete in reverse dependency order
+    await db.toolMovements.deleteMany()
+    await db.toolKitItems.deleteMany()
+    await db.toolKits.deleteMany()
+    await db.inventoryTools.deleteMany()
+    await db.toolInstallers.deleteMany()
     await db.dispatchItems.deleteMany()
     await db.returnItems.deleteMany()
     await db.dispatches.deleteMany()
     await db.returns.deleteMany()
+    await db.projectPhases.deleteMany()
     await db.projectMaterials.deleteMany()
     await db.materialTemplateItems.deleteMany()
     await db.materialTemplates.deleteMany()
@@ -18,6 +24,7 @@ export async function POST() {
     await db.productShelfStock.deleteMany()
     await db.products.deleteMany()
     await db.tasks.deleteMany()
+    await db.projectPhaseTypes.deleteMany()
     await db.shelves.deleteMany()
     await db.racks.deleteMany()
     await db.warehouse.deleteMany()

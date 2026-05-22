@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
 import { isProductCompatibleWithProjectColor } from '@/lib/project-color'
 import { runProjectAutomation } from '@/lib/project-automation'
+import { normalizeDateRange } from '@/lib/project-phases'
 import * as XLSX from 'xlsx'
 
 type ProjectCreateBody = {
@@ -17,6 +18,7 @@ type ProjectCreateBody = {
   budget?: number
   color?: string
   materialListFile?: File | null
+  phases?: Array<{ phaseTypeId: string; startDate?: string; endDate?: string; sortOrder?: number }>
 }
 
 type ImportedMaterialRow = {
@@ -197,6 +199,15 @@ async function readCreateBody(request: NextRequest): Promise<ProjectCreateBody> 
   const materialListFile = formData.get('materialListFile')
   if (materialListFile instanceof File) body.materialListFile = materialListFile
 
+  const phases = formData.get('phases')
+  if (typeof phases === 'string' && phases.trim()) {
+    try {
+      body.phases = JSON.parse(phases)
+    } catch {
+      body.phases = []
+    }
+  }
+
   return body
 }
 
@@ -252,6 +263,10 @@ export async function GET(request: NextRequest) {
             automationKey: true,
           },
         },
+        phases: {
+          include: { phaseType: true },
+          orderBy: [{ startDate: 'asc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
+        },
       },
       orderBy: { createdAt: 'desc' },
     })
@@ -266,7 +281,7 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const body = await readCreateBody(request)
-    const { name, poNumber, projectType, clientId, contractorId, projectDate, startDate, endDate, status, budget, color, materialListFile } = body
+    const { name, poNumber, projectType, clientId, contractorId, projectDate, startDate, endDate, status, budget, color, materialListFile, phases } = body
 
     if (!name || !clientId) {
       return NextResponse.json(
@@ -449,6 +464,27 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      if (Array.isArray(phases) && phases.length > 0) {
+        for (const [index, phase] of phases.entries()) {
+          const phaseTypeId = String(phase.phaseTypeId || '').trim()
+          if (!phaseTypeId) continue
+          const range = normalizeDateRange(
+            phase.startDate || startDate || projectDate,
+            phase.endDate || endDate || phase.startDate || startDate || projectDate
+          )
+          await tx.projectPhases.create({
+            data: {
+              projectId: project.id,
+              phaseTypeId,
+              startDate: range.startDate,
+              endDate: range.endDate,
+              status: 'pending',
+              sortOrder: Number.isFinite(Number(phase.sortOrder)) ? Number(phase.sortOrder) : index,
+            },
+          })
+        }
+      }
+
       const shouldAutoSchedule =
         !status &&
         Boolean(startDate) &&
@@ -469,6 +505,10 @@ export async function POST(request: NextRequest) {
           materials: {
             include: { product: true },
             orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }],
+          },
+          phases: {
+            include: { phaseType: true },
+            orderBy: [{ startDate: 'asc' }, { sortOrder: 'asc' }, { createdAt: 'asc' }],
           },
         },
       })

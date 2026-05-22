@@ -8,6 +8,7 @@ import {
   ArrowUp,
   ArrowUpDown,
   CalendarDays,
+  ChevronDown,
   CheckCircle2,
   FileSpreadsheet,
   Info,
@@ -24,6 +25,7 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
+import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import {
   Dialog,
   DialogClose,
@@ -72,15 +74,28 @@ interface ForecastItem {
   productId: string
   productName: string
   productCode: string
+  family?: string
   unitOfMeasure: string
   shelfStock: number
   recepcionStock: number
   availableNow: number
   pendingPurchases: number
   committedOutflows: number
+  nextProjectsDemand?: number
+  nextProjectsCount?: number
+  favoriteReserveMinimum?: number
   projectedStock: number
+  projectedAfterLookahead?: number
+  projectedAfterReserve?: number
   shortage: number
+  recommendedOrder?: number
   affectedProjects: AffectedProject[]
+  lookaheadProjects?: {
+    id: string
+    name: string
+    needed: number
+    date: string | null
+  }[]
 }
 
 interface ForecastSummary {
@@ -94,6 +109,39 @@ interface ForecastSummary {
 
 interface ForecastResponse {
   items: ForecastItem[]
+  recommendations?: {
+    rules: {
+      favoriteReserveMinimum: number
+      lookaheadProjects: number
+      reorderCycleDays: number
+    }
+    projectsEvaluated: number
+    nextReviewDate: string
+    favoriteCount: number
+    orderCount: number
+    totalRecommendedUnits: number
+    items: {
+      productId: string
+      productName: string
+      productCode: string
+      family: string
+      unitOfMeasure: string
+      availableNow: number
+      pendingPurchases: number
+      nextProjectsDemand: number
+      nextProjectsCount: number
+      reserveMinimum: number
+      projectedAfterReserve: number
+      recommendedOrder: number
+      reason: string
+      projects: {
+        id: string
+        name: string
+        needed: number
+        date: string | null
+      }[]
+    }[]
+  }
   summary: ForecastSummary
 }
 
@@ -194,6 +242,10 @@ function StockNumber({
   )
 }
 
+function getOrderQuantity(item: ForecastItem) {
+  return Math.max(item.recommendedOrder ?? 0, item.shortage)
+}
+
 function defaultSortDirection(key: SortKey): SortDirection {
   return key === 'product' || key === 'urgency' || key === 'affectedProjects' ? 'asc' : 'desc'
 }
@@ -226,8 +278,10 @@ function compareForecastItems(a: ForecastItem, b: ForecastItem, sortConfig: Sort
       result = a.projectedStock - b.projectedStock
       break
     case 'shortage':
-    case 'recommendedOrder':
       result = a.shortage - b.shortage
+      break
+    case 'recommendedOrder':
+      result = getOrderQuantity(a) - getOrderQuantity(b)
       break
     case 'urgency':
       result = urgencyRank(urgencyMap.get(a.productId) ?? 'ok') - urgencyRank(urgencyMap.get(b.productId) ?? 'ok')
@@ -285,7 +339,7 @@ function POConfirmModal({ open, onOpenChange, selectedItems, targetDate, onSucce
     (next: boolean) => {
       if (next) {
         const qtys: Record<string, number> = {}
-        for (const item of selectedItems) qtys[item.productId] = item.shortage
+        for (const item of selectedItems) qtys[item.productId] = getOrderQuantity(item)
         setEditedQtys(qtys)
         setSupplierId('')
         setNotes('')
@@ -343,7 +397,7 @@ function POConfirmModal({ open, onOpenChange, selectedItems, targetDate, onSucce
     }
 
     const hasInvalidQty = selectedItems.some((item) => {
-      const q = editedQtys[item.productId] ?? item.shortage
+      const q = editedQtys[item.productId] ?? getOrderQuantity(item)
       return !q || q <= 0 || !Number.isInteger(q)
     })
     if (hasInvalidQty) {
@@ -362,7 +416,7 @@ function POConfirmModal({ open, onOpenChange, selectedItems, targetDate, onSucce
       notes: ['Inventory Forecast — target: ' + targetDate, notes].filter(Boolean).join('\n'),
       items: selectedItems.map((item) => ({
         productId: item.productId,
-        quantity: editedQtys[item.productId] ?? item.shortage,
+        quantity: editedQtys[item.productId] ?? getOrderQuantity(item),
         unitPrice: 0,
         shelfId: null as null,
       })),
@@ -406,7 +460,7 @@ function POConfirmModal({ open, onOpenChange, selectedItems, targetDate, onSucce
             </TableHeader>
             <TableBody>
               {selectedItems.map((item) => {
-                const qty = editedQtys[item.productId] ?? item.shortage
+                const qty = editedQtys[item.productId] ?? getOrderQuantity(item)
                 const invalid = !qty || qty <= 0
                 return (
                   <TableRow key={item.productId}>
@@ -418,7 +472,7 @@ function POConfirmModal({ open, onOpenChange, selectedItems, targetDate, onSucce
                       {item.unitOfMeasure}
                     </TableCell>
                     <TableCell className="text-right tabular-nums text-rose-600 font-medium">
-                      {item.shortage}
+                      {item.shortage > 0 ? item.shortage : '-'}
                     </TableCell>
                     <TableCell className="text-right">
                       <Input
@@ -530,8 +584,10 @@ export function InventoryTimelineModule() {
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [modalOpen, setModalOpen] = useState(false)
   const [favoritesOpen, setFavoritesOpen] = useState(false)
+  const [recommendationsOpen, setRecommendationsOpen] = useState(false)
   const [favoriteSearch, setFavoriteSearch] = useState('')
   const [favoriteIds, setFavoriteIds] = useState<Set<string>>(new Set())
+  const favoriteIdList = useMemo(() => Array.from(favoriteIds).sort(), [favoriteIds])
 
   useEffect(() => {
     try {
@@ -547,13 +603,14 @@ export function InventoryTimelineModule() {
   }, [favoriteIds])
 
   const { data, isLoading, isFetching } = useQuery<ForecastResponse>({
-    queryKey: ['inventory-forecast', targetDate, mode, includePending],
+    queryKey: ['inventory-forecast', targetDate, mode, includePending, favoriteIdList],
     queryFn: async () => {
       const params = new URLSearchParams({
         date: targetDate,
         mode,
         includePending: String(includePending),
       })
+      if (favoriteIdList.length > 0) params.set('favoriteIds', favoriteIdList.join(','))
       const res = await fetch(`/api/inventory/forecast?${params}`)
       if (!res.ok) throw new Error('Failed to load forecast')
       return res.json()
@@ -587,9 +644,16 @@ export function InventoryTimelineModule() {
         availableNow: product._totalShelfStock ?? product.currentStock ?? 0,
         pendingPurchases: 0,
         committedOutflows: 0,
+        nextProjectsDemand: 0,
+        nextProjectsCount: 0,
+        favoriteReserveMinimum: 10,
         projectedStock: product._totalShelfStock ?? product.currentStock ?? 0,
+        projectedAfterLookahead: product._totalShelfStock ?? product.currentStock ?? 0,
+        projectedAfterReserve: (product._totalShelfStock ?? product.currentStock ?? 0) - 10,
         shortage: 0,
+        recommendedOrder: Math.max(0, 10 - (product._totalShelfStock ?? product.currentStock ?? 0)),
         affectedProjects: [],
+        lookaheadProjects: [],
       })
     }
     return Array.from(byId.values())
@@ -657,6 +721,19 @@ export function InventoryTimelineModule() {
     shortageItems.length > 0 && shortageItems.every((i) => selectedIds.has(i.productId))
 
   const selectedItems = allItems.filter((i) => selectedIds.has(i.productId))
+  const replenishment = data?.recommendations
+  const recommendedProductIds = new Set(
+    (replenishment?.items ?? [])
+      .filter((item) => item.recommendedOrder > 0)
+      .map((item) => item.productId),
+  )
+  const recommendedItems = allItems.filter((i) => recommendedProductIds.has(i.productId))
+  const allRecommendedSelected =
+    recommendedItems.length > 0 && recommendedItems.every((i) => selectedIds.has(i.productId))
+
+  const selectAllRecommended = useCallback(() => {
+    setSelectedIds(new Set(recommendedItems.map((i) => i.productId)))
+  }, [recommendedItems])
   const favoriteProductOptions = useMemo(() => {
     const term = favoriteSearch.trim().toLowerCase()
     return products
@@ -732,7 +809,7 @@ export function InventoryTimelineModule() {
           <td class="num">${item.committedOutflows ? `-${escapeHtml(item.committedOutflows)}` : '-'}</td>
           <td class="num">${escapeHtml(item.projectedStock)}</td>
           <td class="num">${item.shortage > 0 ? `-${escapeHtml(item.shortage)}` : '-'}</td>
-          <td class="num">${item.shortage > 0 ? escapeHtml(item.shortage) : '-'}</td>
+          <td class="num">${getOrderQuantity(item) > 0 ? escapeHtml(getOrderQuantity(item)) : '-'}</td>
           <td>${escapeHtml(urgency.toUpperCase())}</td>
           <td>${escapeHtml(affectedProjects)}</td>
         </tr>
@@ -826,7 +903,7 @@ export function InventoryTimelineModule() {
         'Project Needs': item.committedOutflows,
         Projected: item.projectedStock,
         Shortage: item.shortage,
-        'Recommended Order': item.shortage,
+        'Recommended Order': getOrderQuantity(item),
         Urgency: urgency.toUpperCase(),
         'Affected Projects': affectedProjects,
       }
@@ -895,6 +972,122 @@ export function InventoryTimelineModule() {
         </div>
 
         {/* ── Controls ── */}
+        {false && replenishment && favoriteIds.size > 0 && (
+          <Card className="border-teal-200">
+            <CardHeader className="pb-3">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <ShoppingCart className="h-4 w-4 text-teal-700" />
+                    15-day ordering recommendations
+                  </CardTitle>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Favorites only · reserve {replenishment.rules.favoriteReserveMinimum} units · next{' '}
+                    {replenishment.projectsEvaluated} active projects reviewed · next review{' '}
+                    {replenishment.nextReviewDate}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline">{replenishment.orderCount} to order</Badge>
+                  <Badge variant="outline">{replenishment.totalRecommendedUnits} units</Badge>
+                  {recommendedItems.length > 0 && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="outline"
+                      onClick={allRecommendedSelected ? clearSelection : selectAllRecommended}
+                    >
+                      {allRecommendedSelected ? 'Deselect recommended' : 'Select recommended'}
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent className="p-0">
+              {replenishment.items.length === 0 ? (
+                <div className="px-4 pb-4 text-sm text-muted-foreground">
+                  Select favorites to calculate purchase recommendations.
+                </div>
+              ) : (
+                <div className="overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Material</TableHead>
+                        <TableHead>Family</TableHead>
+                        <TableHead className="text-right">Available</TableHead>
+                        <TableHead className="text-right">Pending</TableHead>
+                        <TableHead className="text-right">Next 25 projects</TableHead>
+                        <TableHead className="text-right">Reserve</TableHead>
+                        <TableHead className="text-right">Order</TableHead>
+                        <TableHead>Projects</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {replenishment.items.map((item) => (
+                        <TableRow key={item.productId}>
+                          <TableCell>
+                            <p className="font-medium text-sm leading-tight">{item.productName}</p>
+                            <p className="text-xs text-muted-foreground">{item.productCode}</p>
+                          </TableCell>
+                          <TableCell className="text-sm text-muted-foreground">
+                            {item.family || '-'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{item.availableNow}</TableCell>
+                          <TableCell className="text-right tabular-nums text-blue-700">
+                            {item.pendingPurchases ? `+${item.pendingPurchases}` : '-'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums text-amber-700">
+                            {item.nextProjectsDemand || '-'}
+                          </TableCell>
+                          <TableCell className="text-right tabular-nums">{item.reserveMinimum}</TableCell>
+                          <TableCell className="text-right">
+                            {item.recommendedOrder > 0 ? (
+                              <Badge className="bg-teal-100 text-teal-800 border border-teal-200">
+                                {item.recommendedOrder}
+                              </Badge>
+                            ) : (
+                              <span className="text-xs text-emerald-700">Covered</span>
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-1 max-w-[220px]">
+                              {item.projects.slice(0, 2).map((project) => (
+                                <Tooltip key={project.id}>
+                                  <TooltipTrigger>
+                                    <Badge
+                                      variant="outline"
+                                      className="text-[10px] px-1.5 h-4 cursor-default max-w-[100px] truncate block"
+                                    >
+                                      {project.name}
+                                    </Badge>
+                                  </TooltipTrigger>
+                                  <TooltipContent>
+                                    {project.name} needs {project.needed} {item.unitOfMeasure}
+                                    {project.date ? ` · ${project.date}` : ''}
+                                  </TooltipContent>
+                                </Tooltip>
+                              ))}
+                              {item.projects.length > 2 && (
+                                <Badge variant="outline" className="text-[10px] px-1.5 h-4">
+                                  +{item.projects.length - 2}
+                                </Badge>
+                              )}
+                              {item.projects.length === 0 && (
+                                <span className="text-xs text-muted-foreground">Reserve only</span>
+                              )}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardContent className="pt-5">
             <div className="flex flex-wrap items-end gap-5">
@@ -1050,7 +1243,7 @@ export function InventoryTimelineModule() {
                       {favoriteItems.length}
                     </p>
                     <p className="text-xs text-muted-foreground">favorite products watched</p>
-                    <p className="text-[11px] text-muted-foreground">Typical supplier delay: 25 days</p>
+                    <p className="text-[11px] text-muted-foreground">Reserve rule: 10 units each</p>
                   </div>
                 </div>
               </CardContent>
@@ -1254,7 +1447,8 @@ export function InventoryTimelineModule() {
                   <TableBody>
                     {sortedVisibleItems.map((item) => {
                       const isSelected = selectedIds.has(item.productId)
-                      const canSelect = item.shortage > 0
+                      const orderQuantity = getOrderQuantity(item)
+                      const canSelect = orderQuantity > 0
                       const urgency = urgencyMap.get(item.productId) ?? 'ok'
                       return (
                         <TableRow
@@ -1344,8 +1538,8 @@ export function InventoryTimelineModule() {
                           </TableCell>
 
                           <TableCell className="text-right font-semibold tabular-nums">
-                            {item.shortage > 0 ? (
-                              <span className="text-blue-700">{item.shortage}</span>
+                            {orderQuantity > 0 ? (
+                              <span className="text-blue-700">{orderQuantity}</span>
                             ) : (
                               <span className="text-muted-foreground text-xs">—</span>
                             )}
@@ -1406,6 +1600,143 @@ export function InventoryTimelineModule() {
             )}
           </CardContent>
         </Card>
+
+        {replenishment && favoriteIds.size > 0 && (
+          <Collapsible open={recommendationsOpen} onOpenChange={setRecommendationsOpen}>
+            <Card className="border-teal-200/80">
+              <CardHeader className="pb-3">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div>
+                    <CardTitle className="text-base flex items-center gap-2">
+                      <ShoppingCart className="h-4 w-4 text-teal-700" />
+                      Recomendaciones de compra para favoritos
+                    </CardTitle>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      Analisis secundario para preparar compras recurrentes sin reemplazar la tabla principal.
+                    </p>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Badge variant="outline">{replenishment.orderCount} to order</Badge>
+                    <Badge variant="outline">{replenishment.totalRecommendedUnits} units</Badge>
+                    <Badge variant="outline">Next review {replenishment.nextReviewDate}</Badge>
+                    <CollapsibleTrigger asChild>
+                      <Button type="button" size="sm" variant="outline" className="gap-1.5">
+                        {recommendationsOpen ? 'Hide details' : 'View details'}
+                        <ChevronDown className={cn('h-3.5 w-3.5 transition-transform', recommendationsOpen && 'rotate-180')} />
+                      </Button>
+                    </CollapsibleTrigger>
+                  </div>
+                </div>
+              </CardHeader>
+
+              <CollapsibleContent>
+                <CardContent className="space-y-3 p-0">
+                  <div className="mx-4 rounded-md border border-teal-200 bg-teal-50/70 p-3 text-xs text-teal-900">
+                    Esta seccion mira solo materiales favoritos, revisa los proximos{' '}
+                    {replenishment.rules.lookaheadProjects} proyectos activos, mantiene{' '}
+                    {replenishment.rules.favoriteReserveMinimum} piezas de reserva por favorito,
+                    {includePending ? ' descuenta ordenes pendientes,' : ' ignora ordenes pendientes,'} y sugiere revisar cada{' '}
+                    {replenishment.rules.reorderCycleDays} dias.
+                  </div>
+
+                  <div className="flex items-center justify-end px-4">
+                    {recommendedItems.length > 0 && (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={allRecommendedSelected ? clearSelection : selectAllRecommended}
+                      >
+                        {allRecommendedSelected ? 'Deselect recommended' : 'Select recommended'}
+                      </Button>
+                    )}
+                  </div>
+
+                  {replenishment.items.length === 0 ? (
+                    <div className="px-4 pb-4 text-sm text-muted-foreground">
+                      Select favorites to calculate purchase recommendations.
+                    </div>
+                  ) : (
+                    <div className="overflow-x-auto">
+                      <Table>
+                        <TableHeader>
+                          <TableRow>
+                            <TableHead>Material</TableHead>
+                            <TableHead>Family</TableHead>
+                            <TableHead className="text-right">Available</TableHead>
+                            <TableHead className="text-right">Pending</TableHead>
+                            <TableHead className="text-right">Next 25 projects</TableHead>
+                            <TableHead className="text-right">Reserve</TableHead>
+                            <TableHead className="text-right">Order</TableHead>
+                            <TableHead>Projects</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {replenishment.items.map((item) => (
+                            <TableRow key={item.productId}>
+                              <TableCell>
+                                <p className="font-medium text-sm leading-tight">{item.productName}</p>
+                                <p className="text-xs text-muted-foreground">{item.productCode}</p>
+                              </TableCell>
+                              <TableCell className="text-sm text-muted-foreground">
+                                {item.family || '-'}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">{item.availableNow}</TableCell>
+                              <TableCell className="text-right tabular-nums text-blue-700">
+                                {item.pendingPurchases ? `+${item.pendingPurchases}` : '-'}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums text-amber-700">
+                                {item.nextProjectsDemand || '-'}
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">{item.reserveMinimum}</TableCell>
+                              <TableCell className="text-right">
+                                {item.recommendedOrder > 0 ? (
+                                  <Badge className="bg-teal-100 text-teal-800 border border-teal-200">
+                                    {item.recommendedOrder}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-xs text-emerald-700">Covered</span>
+                                )}
+                              </TableCell>
+                              <TableCell>
+                                <div className="flex flex-wrap gap-1 max-w-[220px]">
+                                  {item.projects.slice(0, 2).map((project) => (
+                                    <Tooltip key={project.id}>
+                                      <TooltipTrigger>
+                                        <Badge
+                                          variant="outline"
+                                          className="text-[10px] px-1.5 h-4 cursor-default max-w-[100px] truncate block"
+                                        >
+                                          {project.name}
+                                        </Badge>
+                                      </TooltipTrigger>
+                                      <TooltipContent>
+                                        {project.name} needs {project.needed} {item.unitOfMeasure}
+                                        {project.date ? ` - ${project.date}` : ''}
+                                      </TooltipContent>
+                                    </Tooltip>
+                                  ))}
+                                  {item.projects.length > 2 && (
+                                    <Badge variant="outline" className="text-[10px] px-1.5 h-4">
+                                      +{item.projects.length - 2}
+                                    </Badge>
+                                  )}
+                                  {item.projects.length === 0 && (
+                                    <span className="text-xs text-muted-foreground">Reserve only</span>
+                                  )}
+                                </div>
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </CardContent>
+              </CollapsibleContent>
+            </Card>
+          </Collapsible>
+        )}
 
         {/* ── Info footer ── */}
         <div className="flex gap-3 rounded-lg border border-blue-200 bg-blue-50 dark:bg-blue-950/30 dark:border-blue-900 p-4 text-sm text-blue-800 dark:text-blue-200">
