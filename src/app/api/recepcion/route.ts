@@ -4,7 +4,11 @@ import { db } from '@/lib/db'
 export async function GET() {
   try {
     const items = await db.recepcionItem.findMany({
-      orderBy: { createdAt: 'desc' },
+      orderBy: [
+        { purchase: { createdAt: 'desc' } },
+        { return: { createdAt: 'desc' } },
+        { createdAt: 'asc' },
+      ],
       include: {
         product: {
           select: { id: true, name: true, code: true, unitOfMeasure: true, unitQuantity: true, preferredShelfId: true },

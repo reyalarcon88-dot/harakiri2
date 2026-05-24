@@ -20,7 +20,12 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: 'desc' },
     })
 
-    return NextResponse.json(transfers)
+    return NextResponse.json(
+      transfers.map((transfer) => ({
+        ...transfer,
+        quantity: Number(transfer.quantity),
+      }))
+    )
   } catch (error) {
     console.error('Error al listar transferencias:', error)
     return NextResponse.json({ error: 'Error al listar transferencias' }, { status: 500 })

@@ -3277,6 +3277,54 @@ function InfoTab({
 
 // ─── Materials Tab ────────────────────────────────────────────────────────────
 
+/**
+ * Orden visual canónico de materiales en este módulo: por sección de
+ * ingeniería, luego comparadores especiales para Structural Frame /
+ * Fasteners, luego familia + dimensiones, con anchor por grupo para
+ * mantener cohesión visual. Se reusa en MaterialsTab y en cualquier
+ * diálogo derivado (ej. "Pedir materiales faltantes") para que el orden
+ * sea siempre el mismo que ve el usuario en la tabla.
+ */
+function sortMaterialsForDisplay(materials: ProjectMaterial[]): ProjectMaterial[] {
+  const groupMinOrder = new Map<string, number>()
+  for (const mat of materials) {
+    const matSection = mat.engineeringSection || mat.product?.engineeringSection || ''
+    const key = `${matSection}|${getProductFamily(mat.product?.name || '')}`
+    const cur = groupMinOrder.get(key) ?? Infinity
+    groupMinOrder.set(key, Math.min(cur, mat.sortOrder ?? 0))
+  }
+
+  return materials.slice().sort((a, b) => {
+    const aSection = a.engineeringSection || a.product?.engineeringSection || ''
+    const bSection = b.engineeringSection || b.product?.engineeringSection || ''
+    const sectionDiff = getSectionOrder(aSection) - getSectionOrder(bSection)
+    if (sectionDiff !== 0) return sectionDiff
+
+    if (aSection === 'Structural Frame' && bSection === 'Structural Frame') {
+      return compareStructuralFrameMaterials(a.product?.name || '', b.product?.name || '')
+    }
+
+    if (aSection === 'Fasteners & Hardware' && bSection === 'Fasteners & Hardware') {
+      return compareFastenerMaterials(a.product?.name || '', b.product?.name || '')
+    }
+
+    const aName = a.product?.name || ''
+    const bName = b.product?.name || ''
+    const aFamily = getProductFamily(aName)
+    const bFamily = getProductFamily(bName)
+
+    if (aFamily === bFamily) {
+      return compareMaterialsByDimensions(aName, bName)
+    }
+
+    const aKey = `${aSection}|${aFamily}`
+    const bKey = `${bSection}|${bFamily}`
+    const aGroupOrder = groupMinOrder.get(aKey) ?? (a.sortOrder ?? 0)
+    const bGroupOrder = groupMinOrder.get(bKey) ?? (b.sortOrder ?? 0)
+    return aGroupOrder - bGroupOrder
+  })
+}
+
 function MaterialsTab({
   project,
   products,
@@ -3545,8 +3593,10 @@ function MaterialsTab({
   const handleOpenRequestDialog = () => {
     // Only request what is still uncovered after dispatches, open purchases,
     // and current stock available in shelves.
+    // Iterar en el mismo orden visual que la tabla, para que el diálogo
+    // muestre los items en el orden que el usuario reconoce.
     const missing: { productId: string; productName: string; productCode: string; needed: number }[] = []
-    for (const mat of project.materials) {
+    for (const mat of sortMaterialsForDisplay(project.materials)) {
       const product = products.find((p) => p.id === mat.productId)
       if (!product) continue
       const inStock = product._availableShelfStock ?? product._totalShelfStock ?? product.currentStock ?? 0
@@ -4041,47 +4091,7 @@ function MaterialsTab({
       ) : (() => {
         const q = matSearch.trim().toLowerCase()
 
-        // Pre-compute the earliest sortOrder for each (section, product-family) group so
-        // that families maintain their relative section order while similar products cluster.
-        const groupMinOrder = new Map<string, number>()
-        for (const mat of project.materials) {
-          const matSection = mat.engineeringSection || mat.product?.engineeringSection || ''
-          const key = `${matSection}|${getProductFamily(mat.product?.name || '')}`
-          const cur = groupMinOrder.get(key) ?? Infinity
-          groupMinOrder.set(key, Math.min(cur, mat.sortOrder ?? 0))
-        }
-
-        const sortedMaterials = project.materials.slice().sort((a, b) => {
-          const aSection = a.engineeringSection || a.product?.engineeringSection || ''
-          const bSection = b.engineeringSection || b.product?.engineeringSection || ''
-          const sectionDiff = getSectionOrder(aSection) - getSectionOrder(bSection)
-          if (sectionDiff !== 0) return sectionDiff
-
-          if (aSection === 'Structural Frame' && bSection === 'Structural Frame') {
-            return compareStructuralFrameMaterials(a.product?.name || '', b.product?.name || '')
-          }
-
-          if (aSection === 'Fasteners & Hardware' && bSection === 'Fasteners & Hardware') {
-            return compareFastenerMaterials(a.product?.name || '', b.product?.name || '')
-          }
-
-          const aName = a.product?.name || ''
-          const bName = b.product?.name || ''
-          const aFamily = getProductFamily(aName)
-          const bFamily = getProductFamily(bName)
-
-          if (aFamily === bFamily) {
-            // Same product family → larger dimension first
-            return compareMaterialsByDimensions(aName, bName)
-          }
-
-          // Different families → keep relative section order by group anchor
-          const aKey = `${aSection}|${aFamily}`
-          const bKey = `${bSection}|${bFamily}`
-          const aGroupOrder = groupMinOrder.get(aKey) ?? (a.sortOrder ?? 0)
-          const bGroupOrder = groupMinOrder.get(bKey) ?? (b.sortOrder ?? 0)
-          return aGroupOrder - bGroupOrder
-        })
+        const sortedMaterials = sortMaterialsForDisplay(project.materials)
         const materialRows = sortedMaterials.map((mat) => {
           const returned = returnedByProduct.get(mat.productId) || 0
           const coverage = getMaterialCoverage(mat)
@@ -7664,7 +7674,7 @@ function AddMaterialDialogContent({
             <PopoverContent className="w-[--radix-popover-trigger-width] p-0" align="start">
               <Command>
                 <CommandInput placeholder={t('projects.addMaterial.searchInputPlaceholder')} className="h-9" autoFocus />
-                <CommandList className="max-h-[320px]">
+                <CommandList className="max-h-[220px]">
                   <CommandEmpty>
                     {availableProducts.length === 0
                       ? t('projects.addMaterial.allAdded')
