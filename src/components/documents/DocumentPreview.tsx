@@ -1,8 +1,9 @@
 'use client'
 
+import dynamic from 'next/dynamic'
 import { useEffect, useRef, useState } from 'react'
+import type { ReactNode } from 'react'
 import { AlertTriangle, FileText, Loader2 } from 'lucide-react'
-import { Document, Page, pdfjs } from 'react-pdf'
 import { useI18n } from '@/components/layout/I18nProvider'
 import { Button } from '@/components/ui/button'
 import {
@@ -13,11 +14,6 @@ import {
 } from '@/lib/document-utils'
 import type { InventoryDocumentRecord } from '@/types/documents'
 
-pdfjs.GlobalWorkerOptions.workerSrc = new URL(
-  'react-pdf/node_modules/pdfjs-dist/build/pdf.worker.min.mjs',
-  import.meta.url
-).toString()
-
 interface DocumentPreviewProps {
   document: InventoryDocumentRecord
   onLoadError: (message: string) => void
@@ -27,6 +23,67 @@ interface DocumentPreviewProps {
   rotation: number
   zoom: number
 }
+
+interface PdfPreviewCanvasProps {
+  documentKey: string
+  error: ReactNode
+  file: string
+  loading: ReactNode
+  onLoadError: (error: unknown) => void
+  onLoadSuccess: (pageCount: number) => void
+  pageLoading: ReactNode
+  pageNumber: number
+  rotation: number
+  width: number
+}
+
+const PdfPreviewCanvas = dynamic<PdfPreviewCanvasProps>(
+  async () => {
+    const { Document, Page, pdfjs } = await import('react-pdf')
+
+    pdfjs.GlobalWorkerOptions.workerSrc = new URL(
+      'react-pdf/node_modules/pdfjs-dist/build/pdf.worker.min.mjs',
+      import.meta.url,
+    ).toString()
+
+    function PdfPreviewCanvasComponent({
+      documentKey,
+      error,
+      file,
+      loading,
+      onLoadError,
+      onLoadSuccess,
+      pageLoading,
+      pageNumber,
+      rotation,
+      width,
+    }: PdfPreviewCanvasProps) {
+      return (
+        <Document
+          file={file}
+          key={documentKey}
+          loading={loading}
+          error={error}
+          onLoadSuccess={({ numPages }) => onLoadSuccess(numPages)}
+          onLoadError={onLoadError}
+        >
+          <Page
+            pageNumber={pageNumber}
+            width={width}
+            rotate={rotation}
+            renderAnnotationLayer={false}
+            renderTextLayer={false}
+            loading={pageLoading}
+            className="[&_.react-pdf__Page__canvas]:mx-auto [&_.react-pdf__Page__canvas]:rounded-md [&_.react-pdf__Page__canvas]:shadow-[0_24px_60px_rgba(15,23,42,0.16)]"
+          />
+        </Document>
+      )
+    }
+
+    return PdfPreviewCanvasComponent
+  },
+  { ssr: false },
+)
 
 function PreviewError({
   document,
@@ -183,40 +240,34 @@ export function DocumentPreview({
         previewError ? (
           <PreviewError message={previewError} document={document} />
         ) : (
-        <Document
-          file={resolvedUrl}
-          key={`${document.id}-${refreshKey}`}
-          loading={
-            <div className="flex items-center gap-2 rounded-md border border-border/70 bg-card/80 px-4 py-3 text-sm text-muted-foreground">
-              <Loader2 className="h-4 w-4 animate-spin" />
-              {t('documents.preview.loadingPdf')}
-            </div>
-          }
-          error={<PreviewError message={t('documents.preview.pdfRenderError')} document={document} />}
-          onLoadSuccess={({ numPages }) => {
-            onLoadSuccess(numPages)
-            setPreviewError(null)
-          }}
-          onLoadError={(error) => {
-            const message = error instanceof Error ? error.message : t('documents.preview.openPdfError')
-            setPreviewError(message)
-            onLoadError(message)
-          }}
-        >
-          <Page
+          <PdfPreviewCanvas
+            documentKey={`${document.id}-${refreshKey}`}
+            file={resolvedUrl}
             pageNumber={pageNumber}
             width={pageWidth}
-            rotate={rotation}
-            renderAnnotationLayer={false}
-            renderTextLayer={false}
+            rotation={rotation}
             loading={
+              <div className="flex items-center gap-2 rounded-md border border-border/70 bg-card/80 px-4 py-3 text-sm text-muted-foreground">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                {t('documents.preview.loadingPdf')}
+              </div>
+            }
+            pageLoading={
               <div className="rounded-md border border-border/70 bg-card/80 px-4 py-3 text-sm text-muted-foreground shadow-sm">
                 {t('documents.preview.renderingPage')}
               </div>
             }
-            className="[&_.react-pdf__Page__canvas]:mx-auto [&_.react-pdf__Page__canvas]:rounded-md [&_.react-pdf__Page__canvas]:shadow-[0_24px_60px_rgba(15,23,42,0.16)]"
+            error={<PreviewError message={t('documents.preview.pdfRenderError')} document={document} />}
+            onLoadSuccess={(numPages) => {
+              onLoadSuccess(numPages)
+              setPreviewError(null)
+            }}
+            onLoadError={(error) => {
+              const message = error instanceof Error ? error.message : t('documents.preview.openPdfError')
+              setPreviewError(message)
+              onLoadError(message)
+            }}
           />
-        </Document>
         )
       ) : null}
 

@@ -26,6 +26,7 @@ import {
   ChevronLeft,
   ChevronRight,
   CalendarDays,
+  ClipboardList,
   Pencil,
   Trash2,
   FolderKanban,
@@ -35,7 +36,10 @@ import {
   Clock,
   Layers,
   StickyNote,
+  Truck,
+  XCircle,
 } from 'lucide-react'
+import type { LucideIcon } from 'lucide-react'
 import { toast } from 'sonner'
 import { useI18n } from '@/components/layout/I18nProvider'
 import { useNavigationStore } from '@/stores/navigation'
@@ -212,48 +216,54 @@ function getStoredCalendarEventFilters(): CalendarEventFilters {
   }
 }
 
-const PROJECT_STATUS_CONFIG: Record<string, { className: string; dotColor: string; bg: string; text: string; border: string }> = {
+const PROJECT_STATUS_CONFIG: Record<string, { className: string; dotColor: string; bg: string; text: string; border: string; icon: LucideIcon }> = {
   planned: {
-    className: 'bg-violet-100 text-violet-800 dark:bg-violet-900/30 dark:text-violet-300',
-    dotColor: 'bg-violet-500',
-    bg: 'rgba(139,92,246,0.1)',
-    text: '#7c3aed',
-    border: 'border-l-violet-500',
+    className: 'bg-teal-100 text-teal-800 dark:bg-teal-900/30 dark:text-teal-300',
+    dotColor: 'bg-teal-500',
+    bg: 'rgba(20,184,166,0.14)',
+    text: '#0f766e',
+    border: 'border-l-teal-500',
+    icon: ClipboardList,
   },
   scheduled: {
     className: 'bg-sky-100 text-sky-800 dark:bg-sky-900/30 dark:text-sky-300',
     dotColor: 'bg-sky-500',
-    bg: 'rgba(14,165,233,0.1)',
+    bg: 'rgba(14,165,233,0.14)',
     text: '#0284c7',
     border: 'border-l-sky-500',
+    icon: CalendarDays,
   },
   in_progress: {
-    className: 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-300',
-    dotColor: 'bg-blue-500',
-    bg: 'rgba(59,130,246,0.1)',
-    text: '#2563eb',
-    border: 'border-l-blue-500',
+    className: 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-300',
+    dotColor: 'bg-amber-500',
+    bg: 'rgba(245,158,11,0.16)',
+    text: '#d97706',
+    border: 'border-l-amber-500',
+    icon: Clock,
   },
   dispatched: {
     className: 'bg-orange-100 text-orange-800 dark:bg-orange-900/30 dark:text-orange-300',
     dotColor: 'bg-orange-500',
-    bg: 'rgba(249,115,22,0.1)',
+    bg: 'rgba(249,115,22,0.16)',
     text: '#ea580c',
     border: 'border-l-orange-500',
+    icon: Truck,
   },
   finished: {
     className: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/30 dark:text-emerald-300',
     dotColor: 'bg-emerald-500',
-    bg: 'rgba(16,185,129,0.1)',
+    bg: 'rgba(16,185,129,0.18)',
     text: '#059669',
     border: 'border-l-emerald-500',
+    icon: CheckCircle2,
   },
   cancelled: {
     className: 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-300',
     dotColor: 'bg-red-500',
-    bg: 'rgba(239,68,68,0.1)',
+    bg: 'rgba(239,68,68,0.16)',
     text: '#dc2626',
     border: 'border-l-red-500',
+    icon: XCircle,
   },
 }
 
@@ -377,6 +387,19 @@ function getProjectCfg(status: string, t: (key: MessageKey) => string) {
   }
 }
 
+function getPhaseCalendarVisual(phase: ProjectPhase, t: (key: MessageKey) => string) {
+  const phaseColor = PROJECT_PHASE_COLOR_CLASS[phase.phaseType.color] || PROJECT_PHASE_COLOR_CLASS.teal
+  const projectCfg = phase.project ? getProjectCfg(phase.project.status, t) : null
+  const useProjectState = phase.project?.status === 'finished' || phase.project?.status === 'cancelled'
+
+  return {
+    bg: useProjectState && projectCfg ? projectCfg.bg : phaseColor.bg,
+    text: useProjectState && projectCfg ? projectCfg.text : phaseColor.text,
+    border: useProjectState && projectCfg ? projectCfg.border : phaseColor.border,
+    projectCfg,
+  }
+}
+
 function getPhaseStatusLabel(status: string) {
   if (status === 'completed') return 'Completada'
   if (status === 'in_progress') return 'En progreso'
@@ -497,6 +520,10 @@ export function CalendarModule() {
 
     if (eventFilters.phases) {
       for (const project of projects) {
+        // Skip phases of projects without a scheduled start date — their phase
+        // dates are only auto-filled fallbacks (projectDate / creation date) and
+        // showing them confuses the calendar.
+        if (!parseDateSafe(project.startDate)) continue
         for (const phase of project.phases || []) {
           const { start, end } = getPhaseDateRange(phase)
           if (!start || !end) continue
@@ -1117,17 +1144,29 @@ export function CalendarModule() {
                     } else {
                       if (event.type === 'phase') {
                         const phase = event.data as ProjectPhase
-                        const color = PROJECT_PHASE_COLOR_CLASS[phase.phaseType.color] || PROJECT_PHASE_COLOR_CLASS.teal
                         const project = phase.project
+                        const visual = getPhaseCalendarVisual(phase, t)
+                        const ProjectStatusIcon = visual.projectCfg?.icon
+                        const projectLabel = project?.poNumber?.trim() || project?.name
+                        const tooltipParts = [
+                          phase.phaseType.name,
+                          projectLabel,
+                          visual.projectCfg?.label,
+                          project?.contractor?.name,
+                        ].filter(Boolean)
                         return (
                           <Draggable key={`phase-${phase.id}`} id={`phase:${phase.id}`}>
                             <button
                               onClick={(e) => { e.stopPropagation(); openPhasePanel({ ...phase, project }) }}
-                              className={`w-full truncate rounded-sm border-l-2 px-1 py-0.5 text-left text-[10px] leading-tight font-bold transition-opacity hover:opacity-80 sm:text-xs cursor-pointer ${color.border}`}
-                              style={{ backgroundColor: color.bg, color: color.text }}
+                              className={`w-full truncate rounded-sm border-l-2 px-1 py-0.5 text-left text-[10px] leading-tight font-bold transition-opacity hover:opacity-80 sm:text-xs cursor-pointer ${visual.border}`}
+                              style={{ backgroundColor: visual.bg, color: visual.text }}
+                              aria-label={tooltipParts.join(' - ')}
                               title={`${phase.phaseType.name}${project ? ` · ${project.name}` : ''}`}
                             >
                               <Layers className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
+                              {ProjectStatusIcon && (
+                                <ProjectStatusIcon className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
+                              )}
                               {phase.phaseType.name}{project ? ` · ${project.name}` : ''}
                             </button>
                           </Draggable>
@@ -1135,6 +1174,7 @@ export function CalendarModule() {
                       }
                       const p = event.data as Project
                       const cfg = getProjectCfg(p.status, t)
+                      const StatusIcon = cfg.icon
                       const label = p.poNumber?.trim() || p.name
                       const tooltipParts = [
                         p.poNumber ? `PO ${p.poNumber}` : p.name,
@@ -1149,7 +1189,7 @@ export function CalendarModule() {
                             style={{ backgroundColor: cfg.bg, color: cfg.text }}
                             title={tooltipParts.join(' · ')}
                           >
-                            <FolderKanban className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
+                            <StatusIcon className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
                             {label}
                           </button>
                         </Draggable>
@@ -1182,26 +1222,43 @@ export function CalendarModule() {
       </div>
 
       {/* Legend */}
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 text-xs text-muted-foreground">
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 rounded-lg border bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
         <span className="font-medium">{t('calendar.legend.title')}</span>
-        {Object.entries(TASK_STATUS_CONFIG).map(([key, cfg]) => {
-          const label = t(getTaskStatusKey(key))
-          return (
-          <div key={`task-${key}`} className="flex items-center gap-1.5">
-            <div className={`h-2.5 w-2.5 rounded-full ${cfg.dotColor}`} />
-            <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${cfg.className}`}>
-              {label}
-            </Badge>
-          </div>
-          )
-        })}
-        <Separator orientation="vertical" className="h-4" />
-        {Object.entries(PROJECT_STATUS_CONFIG).filter(([k]) => k !== 'cancelled').map(([key, cfg]) => (
-          <div key={`proj-${key}`} className="flex items-center gap-1.5">
-            <FolderKanban className="h-3 w-3" style={{ color: cfg.text }} />
-            <span className="text-[10px]">{t(getProjectStatusKey(key))}</span>
-          </div>
-        ))}
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide">{t('navigation.page.projects')}</span>
+          {Object.entries(PROJECT_STATUS_CONFIG).map(([key, cfg]) => {
+            const Icon = cfg.icon
+            return (
+              <div key={`proj-${key}`} className="flex items-center gap-1.5">
+                <Icon className="h-3 w-3" style={{ color: cfg.text }} />
+                <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${cfg.className}`}>
+                  {t(getProjectStatusKey(key))}
+                </Badge>
+              </div>
+            )
+          })}
+        </div>
+        <Separator orientation="vertical" className="hidden h-4 sm:block" />
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] font-semibold uppercase tracking-wide">Fases</span>
+          <Layers className="h-3 w-3 text-violet-500" />
+          <span className="text-[10px]">{locale === 'es' ? 'tipo de fase + estado del proyecto' : 'phase type + project status'}</span>
+        </div>
+        <Separator orientation="vertical" className="hidden h-4 sm:block" />
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[10px] font-semibold uppercase tracking-wide">{t('navigation.page.tasks')}</span>
+          {Object.entries(TASK_STATUS_CONFIG).map(([key, cfg]) => {
+            const label = t(getTaskStatusKey(key))
+            return (
+              <div key={`task-${key}`} className="flex items-center gap-1.5">
+                <div className={`h-2.5 w-2.5 rounded-full ${cfg.dotColor}`} />
+                <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${cfg.className}`}>
+                  {label}
+                </Badge>
+              </div>
+            )
+          })}
+        </div>
       </div>
 
       {/* ─── Day Summary Sheet ─── */}
@@ -1332,6 +1389,7 @@ export function CalendarModule() {
                         <div className="space-y-3">
                           {dayProjectsWithPhases.map(({ project, phases: projectPhases }) => {
                             const cfg = getProjectCfg(project.status, t)
+                            const StatusIcon = cfg.icon
                             const { start, end } = getProjectDateRange(project)
                             const isStart = start && isSameDay(selectedDay, start)
                             const isEnd = end && isSameDay(selectedDay, end)
@@ -1345,13 +1403,14 @@ export function CalendarModule() {
                               >
                                 {/* Project header */}
                                 <div className="flex items-center gap-2">
-                                  <FolderKanban className="h-4 w-4 shrink-0" style={{ color: cfg.text }} />
+                                  <StatusIcon className="h-4 w-4 shrink-0" style={{ color: cfg.text }} />
                                   <span className="text-base font-bold truncate" style={{ color: cfg.text }}>
                                     {poLabel ? `PO ${poLabel}` : project.name}
                                   </span>
                                 </div>
                                 <div className="flex flex-wrap items-center gap-x-2 gap-y-1 mt-1.5 ml-6">
                                   <Badge variant="secondary" className={`text-[10px] ${cfg.className}`}>
+                                    <StatusIcon className="mr-1 h-3 w-3" />
                                     {cfg.label}
                                   </Badge>
                                   {project.contractor?.name && (
@@ -1404,21 +1463,25 @@ export function CalendarModule() {
                                       Fases hoy
                                     </p>
                                     {projectPhases.map((phase) => {
-                                      const color = PROJECT_PHASE_COLOR_CLASS[phase.phaseType.color] || PROJECT_PHASE_COLOR_CLASS.teal
+                                      const visual = getPhaseCalendarVisual({ ...phase, project }, t)
+                                      const ProjectStatusIcon = visual.projectCfg?.icon
                                       const { start: ps, end: pe } = getPhaseDateRange(phase)
                                       const phaseIsStart = ps && isSameDay(selectedDay, ps)
                                       const phaseIsEnd = pe && isSameDay(selectedDay, pe)
                                       return (
                                         <button
                                           key={phase.id}
-                                          className={`w-full rounded-md border-l-2 px-2 py-1.5 text-left transition-colors hover:opacity-80 ${color.border}`}
-                                          style={{ backgroundColor: `${color.bg}cc` }}
+                                          className={`w-full rounded-md border-l-2 px-2 py-1.5 text-left transition-colors hover:opacity-80 ${visual.border}`}
+                                          style={{ backgroundColor: `${visual.bg}cc` }}
                                           onClick={() => { closeDaySheet(); setTimeout(() => openPhasePanel({ ...phase, project }), 250) }}
                                         >
                                           <div className="flex items-center justify-between gap-2">
                                             <div className="flex items-center gap-1.5 min-w-0">
-                                              <Layers className="h-3 w-3 shrink-0" style={{ color: color.text }} />
-                                              <span className="text-xs font-semibold truncate" style={{ color: color.text }}>
+                                              <Layers className="h-3 w-3 shrink-0" style={{ color: visual.text }} />
+                                              {ProjectStatusIcon && (
+                                                <ProjectStatusIcon className="h-3 w-3 shrink-0" style={{ color: visual.projectCfg?.text }} />
+                                              )}
+                                              <span className="text-xs font-semibold truncate" style={{ color: visual.text }}>
                                                 {phase.phaseType.name}
                                               </span>
                                               <Badge variant="secondary" className={`text-[10px] px-1 py-0 shrink-0 ${getPhaseStatusClass(phase.status)}`}>
@@ -1873,17 +1936,34 @@ export function CalendarModule() {
 
     {/* Drag Overlay */}
     <DragOverlay>
-      {draggedPhase ? (
-        <div className="rounded-sm border-l-2 border-primary bg-background px-1 py-0.5 text-left text-[10px] leading-tight font-bold opacity-90 shadow-lg sm:text-xs">
-          <Layers className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
-          {draggedPhase.phase.phaseType.name}
-        </div>
-      ) : draggedProject ? (
-        <div className="rounded-sm border-l-2 px-1 py-0.5 text-left text-[10px] leading-tight font-bold sm:text-xs opacity-90 shadow-lg bg-background border-primary">
-          <FolderKanban className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
-          {draggedProject.project.poNumber?.trim() || draggedProject.project.name}
-        </div>
-      ) : null}
+      {draggedPhase ? (() => {
+        const visual = getPhaseCalendarVisual(draggedPhase.phase, t)
+        const ProjectStatusIcon = visual.projectCfg?.icon
+        return (
+          <div
+            className={`rounded-sm border-l-2 px-1 py-0.5 text-left text-[10px] leading-tight font-bold opacity-90 shadow-lg sm:text-xs ${visual.border}`}
+            style={{ backgroundColor: visual.bg, color: visual.text }}
+          >
+            <Layers className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
+            {ProjectStatusIcon && (
+              <ProjectStatusIcon className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
+            )}
+            {draggedPhase.phase.phaseType.name}
+          </div>
+        )
+      })() : draggedProject ? (() => {
+        const cfg = getProjectCfg(draggedProject.project.status, t)
+        const StatusIcon = cfg.icon
+        return (
+          <div
+            className={`rounded-sm border-l-2 px-1 py-0.5 text-left text-[10px] leading-tight font-bold opacity-90 shadow-lg sm:text-xs ${cfg.border}`}
+            style={{ backgroundColor: cfg.bg, color: cfg.text }}
+          >
+            <StatusIcon className="inline h-2.5 w-2.5 mr-0.5 -mt-px" />
+            {draggedProject.project.poNumber?.trim() || draggedProject.project.name}
+          </div>
+        )
+      })() : null}
     </DragOverlay>
     </DndContext>
   )

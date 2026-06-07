@@ -2,7 +2,7 @@
 
 import { Moon, Sun } from 'lucide-react'
 import { useI18n } from '@/components/layout/I18nProvider'
-import { useTheme } from 'next-themes'
+import { useTheme } from '@/components/layout/ThemeProvider'
 
 import { Button } from '@/components/ui/button'
 import { cn } from '@/lib/utils'

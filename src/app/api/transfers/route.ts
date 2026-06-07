@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { getConversionFactor, packagesToBase } from '@/lib/stock-units'
 
 export async function GET(request: NextRequest) {
   try {
@@ -52,6 +53,13 @@ export async function POST(request: NextRequest) {
     }
 
     const transfer = await db.$transaction(async (tx) => {
+      const product = await tx.products.findUnique({
+        where: { id: productId },
+        select: { unitOfMeasure: true, unitQuantity: true },
+      })
+      const factor = getConversionFactor(product ?? {})
+      const baseDelta = packagesToBase(Number(quantity), factor)
+
       // Decrement stock from source shelf
       const fromStock = await tx.productShelfStock.findUnique({
         where: {
@@ -62,17 +70,18 @@ export async function POST(request: NextRequest) {
         },
       })
 
-      if (!fromStock || fromStock.quantity < quantity) {
+      if (!fromStock || Number(fromStock.quantity) < Number(quantity)) {
         throw new Error('Stock insuficiente en la estanteria de origen')
       }
 
-      const newFromQty = fromStock.quantity - quantity
+      const newFromQty = Number(fromStock.quantity) - Number(quantity)
+      const newFromBase = Math.max(Number(fromStock.baseQuantity || 0) - baseDelta, 0)
       if (newFromQty === 0) {
         await tx.productShelfStock.delete({ where: { id: fromStock.id } })
       } else {
         await tx.productShelfStock.update({
           where: { id: fromStock.id },
-          data: { quantity: newFromQty },
+          data: { quantity: newFromQty, baseQuantity: newFromBase },
         })
       }
 
@@ -88,9 +97,11 @@ export async function POST(request: NextRequest) {
           productId,
           shelfId: toShelfId,
           quantity,
+          baseQuantity: baseDelta,
         },
         update: {
           quantity: { increment: quantity },
+          baseQuantity: { increment: baseDelta },
         },
       })
 
@@ -101,6 +112,7 @@ export async function POST(request: NextRequest) {
           toShelfId,
           productId,
           quantity,
+          baseQuantity: baseDelta,
           transferDate: transferDate || new Date().toISOString().split('T')[0],
           notes: notes || '',
         },

@@ -1,5 +1,6 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
+import { getConversionFactor, packagesToBase } from '@/lib/stock-units'
 
 export async function POST(request: NextRequest) {
   try {
@@ -16,6 +17,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'El código del producto ya existe' }, { status: 409 })
     }
 
+    const initialStock = currentStock ?? 0
+    const factor = getConversionFactor({
+      unitOfMeasure: unitOfMeasure || 'unidad',
+      unitQuantity: unitQuantity != null ? String(unitQuantity) : '',
+    })
     const product = await db.products.create({
       data: {
         code,
@@ -26,7 +32,8 @@ export async function POST(request: NextRequest) {
         unitOfMeasure: unitOfMeasure || 'unidad',
         unitQuantity: unitQuantity !== undefined ? String(unitQuantity) : '',
         minStock: minStock ?? 0,
-        currentStock: currentStock ?? 0,
+        currentStock: initialStock,
+        currentBaseStock: packagesToBase(initialStock, factor),
         referencePrice: referencePrice ?? 0,
         preferredShelfId: preferredShelfId ?? null,
       },
@@ -98,6 +105,7 @@ export async function GET(request: NextRequest) {
         }
       }),
       _totalShelfStock: p.shelfStocks.reduce((sum, ss) => sum + Number(ss.quantity || 0), 0),
+      _totalShelfBaseStock: p.shelfStocks.reduce((sum, ss) => sum + Number((ss as unknown as { baseQuantity?: number }).baseQuantity || 0), 0),
       _availableShelfStock: p.shelfStocks.reduce((sum, ss) => {
         const rv = reserveMap.get(ss.id)
         const reserveQty = Number(rv?.reserve_quantity || 0)

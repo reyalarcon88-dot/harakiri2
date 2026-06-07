@@ -5,6 +5,7 @@ import {
   incrementProjectDispatchQuantities,
   ProjectDispatchValidationError,
 } from '@/lib/server/project-dispatch'
+import { getConversionFactor, packagesToBase } from '@/lib/stock-units'
 
 export async function POST(
   request: NextRequest,
@@ -28,10 +29,15 @@ export async function POST(
       return NextResponse.json({ error: 'Cantidad invalida' }, { status: 400 })
     }
 
-    const recep = await db.recepcionItem.findUnique({ where: { id } })
+    const recep = await db.recepcionItem.findUnique({
+      where: { id },
+      include: { product: { select: { unitOfMeasure: true, unitQuantity: true } } },
+    })
     if (!recep) {
       return NextResponse.json({ error: 'Item de recepcion no encontrado' }, { status: 404 })
     }
+    const factor = getConversionFactor(recep.product)
+    const baseDelta = packagesToBase(qty, factor)
     const availableQuantity = Number(recep.quantity)
     if (qty > availableQuantity) {
       return NextResponse.json(
@@ -63,12 +69,16 @@ export async function POST(
           productId: recep.productId,
           shelfId: null,
           quantity: qty,
+          baseQuantity: baseDelta,
         },
       })
 
       await tx.products.update({
         where: { id: recep.productId },
-        data: { currentStock: { decrement: qty } },
+        data: {
+          currentStock: { decrement: qty },
+          currentBaseStock: { decrement: baseDelta },
+        },
       })
 
       const remaining = availableQuantity - qty
@@ -77,7 +87,7 @@ export async function POST(
       } else {
         await tx.recepcionItem.update({
           where: { id },
-          data: { quantity: remaining },
+          data: { quantity: remaining, baseQuantity: packagesToBase(remaining, factor) },
         })
       }
 

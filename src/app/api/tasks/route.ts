@@ -5,6 +5,26 @@ const taskProjectSelect = {
   id: true,
   name: true,
   poNumber: true,
+  startDate: true,
+  status: true,
+  materials: {
+    select: { plannedQuantity: true, dispatchedQuantity: true },
+  },
+} as const
+
+function enrichTaskProject<T extends { project: any | null }>(task: T): T {
+  if (!task.project || !Array.isArray(task.project.materials)) return task
+  const { materials, ...rest } = task.project as { materials: Array<{ plannedQuantity: number; dispatchedQuantity: number }>; [k: string]: unknown }
+  const plannedTotal = materials.reduce((a, m) => a + (Number(m.plannedQuantity) || 0), 0)
+  const dispatchedTotal = materials.reduce((a, m) => a + (Number(m.dispatchedQuantity) || 0), 0)
+  return {
+    ...task,
+    project: {
+      ...rest,
+      materialsPlannedTotal: plannedTotal,
+      materialsDispatchedTotal: dispatchedTotal,
+    },
+  } as T
 }
 
 function nullableString(value: unknown) {
@@ -46,7 +66,7 @@ export async function GET(request: NextRequest) {
         { dueDate: 'asc' },
       ],
     })
-    return NextResponse.json(tasks)
+    return NextResponse.json(tasks.map(enrichTaskProject))
   } catch (error) {
     console.error('Error al listar tareas:', error)
     return NextResponse.json({ error: 'Error al listar tareas' }, { status: 500 })
@@ -83,7 +103,7 @@ export async function POST(request: NextRequest) {
       },
     })
 
-    return NextResponse.json(task, { status: 201 })
+    return NextResponse.json(enrichTaskProject(task), { status: 201 })
   } catch (error) {
     console.error('Error al crear tarea:', error)
     return NextResponse.json({ error: 'Error al crear tarea' }, { status: 500 })

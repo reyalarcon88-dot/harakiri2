@@ -28,6 +28,7 @@ import {
 } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { DualQuantityInput } from '@/components/ui/DualQuantityInput'
 import {
   Select,
   SelectContent,
@@ -350,12 +351,13 @@ function AcomodarDialog({
 
         <div className="space-y-2">
           <Label>{t('receiving.place.quantity')}</Label>
-          <Input
-            type="number"
-            min={1}
+          <DualQuantityInput
+            unitOfMeasure={item.product.unitOfMeasure}
+            unitQuantity={parseFloat(item.product.unitQuantity) || 1}
+            value={qty}
+            min={0}
             max={item.quantity}
-            value={quantity}
-            onChange={(event) => setQuantity(event.target.value)}
+            onChange={(pkg) => setQuantity(String(pkg))}
           />
           {qty > item.quantity ? (
             <p className="text-xs text-destructive">

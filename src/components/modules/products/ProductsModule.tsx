@@ -59,6 +59,7 @@ import {
 } from '@/components/ui/table'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { ENGINEERING_SECTIONS } from '@/lib/engineering-sections'
+import { isPackagedUnit } from '@/lib/stock-units'
 
 /* ─── Types ─────────────────────────────────────────── */
 
@@ -97,10 +98,12 @@ interface Product {
   unitQuantity: number
   minStock: number
   currentStock: number
+  currentBaseStock: number
   referencePrice: number
   preferredShelfId: string | null
   createdAt: string
   _totalShelfStock: number
+  _totalShelfBaseStock: number
   shelfStocks: ShelfStock[]
 }
 
@@ -648,9 +651,16 @@ export function ProductsModule() {
                           {product.unitQuantity > 1 && ` (x${product.unitQuantity})`}
                         </TableCell>
                         <TableCell className="text-right">
-                          <span className={`inline-flex items-center justify-center min-w-[3rem] rounded-md px-2 py-0.5 text-xs font-bold tabular-nums ${getStockBadgeClasses(product._totalShelfStock, product.minStock)}`}>
-                            {product._totalShelfStock}
-                          </span>
+                          <div className="flex flex-col items-end gap-0.5">
+                            <span className={`inline-flex items-center justify-center min-w-[3rem] rounded-md px-2 py-0.5 text-xs font-bold tabular-nums ${getStockBadgeClasses(product._totalShelfStock, product.minStock)}`}>
+                              {product._totalShelfStock}
+                            </span>
+                            {isPackagedUnit(product.unitOfMeasure) && product.unitQuantity > 1 ? (
+                              <span className="text-[10px] text-muted-foreground tabular-nums">
+                                ≈ {product._totalShelfBaseStock} ud
+                              </span>
+                            ) : null}
+                          </div>
                         </TableCell>
                         <TableCell className="text-right text-xs tabular-nums text-muted-foreground">
                           {product.minStock}
@@ -969,6 +979,7 @@ export function ProductsModule() {
                     <SelectItem value="caja">{t('products.units.box')}</SelectItem>
                     <SelectItem value="rollo">{t('products.units.roll')}</SelectItem>
                     <SelectItem value="bolsa">{t('products.units.bag')}</SelectItem>
+                    <SelectItem value="palet">{t('products.units.palet')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -988,7 +999,8 @@ export function ProductsModule() {
                   id="add-minstock"
                   type="number"
                   min={0}
-                  value={form.minStock}
+                  value={form.minStock === 0 ? '' : form.minStock}
+                  placeholder="0"
                   onChange={(e) => setForm((f) => ({ ...f, minStock: parseInt(e.target.value) || 0 }))}
                 />
               </div>
@@ -999,7 +1011,8 @@ export function ProductsModule() {
                   type="number"
                   min={0}
                   step="0.01"
-                  value={form.referencePrice}
+                  value={form.referencePrice === 0 ? '' : form.referencePrice}
+                  placeholder="0"
                   onChange={(e) => setForm((f) => ({ ...f, referencePrice: parseFloat(e.target.value) || 0 }))}
                 />
               </div>
@@ -1143,6 +1156,7 @@ export function ProductsModule() {
                     <SelectItem value="caja">{t('products.units.box')}</SelectItem>
                     <SelectItem value="rollo">{t('products.units.roll')}</SelectItem>
                     <SelectItem value="bolsa">{t('products.units.bag')}</SelectItem>
+                    <SelectItem value="palet">{t('products.units.palet')}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -1161,7 +1175,8 @@ export function ProductsModule() {
               <Input
                 type="number"
                 min={0}
-                value={form.minStock}
+                value={form.minStock === 0 ? '' : form.minStock}
+                placeholder="0"
                 onChange={(e) => setForm((f) => ({ ...f, minStock: parseInt(e.target.value) || 0 }))}
               />
             </div>
@@ -1171,7 +1186,8 @@ export function ProductsModule() {
                 type="number"
                 min={0}
                 step="0.01"
-                value={form.referencePrice}
+                value={form.referencePrice === 0 ? '' : form.referencePrice}
+                placeholder="0"
                 onChange={(e) => setForm((f) => ({ ...f, referencePrice: parseFloat(e.target.value) || 0 }))}
               />
               <p className="text-xs text-muted-foreground">

@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { NextRequest, NextResponse } from 'next/server'
 import { runPurchaseOrderAutomation } from '@/lib/server/purchase-order-automation'
+import { getConversionFactor, packagesToBase } from '@/lib/stock-units'
 
 class PurchaseStatusValidationError extends Error {
   constructor(message: string) {
@@ -25,7 +26,11 @@ export async function PATCH(
       const purchase = await tx.purchases.findUnique({
         where: { id },
         include: {
-          items: true,
+          items: {
+            include: {
+              product: { select: { unitOfMeasure: true, unitQuantity: true } },
+            },
+          },
         },
       })
 
@@ -71,16 +76,23 @@ export async function PATCH(
           }
         } else {
           for (const item of purchase.items) {
-            if (item.quantity <= 0) continue
+            if (Number(item.quantity) <= 0) continue
+
+            const factor = getConversionFactor(item.product)
+            const baseQty = packagesToBase(Number(item.quantity), factor)
 
             await tx.products.update({
               where: { id: item.productId },
-              data: { currentStock: { increment: item.quantity } },
+              data: {
+                currentStock: { increment: item.quantity },
+                currentBaseStock: { increment: baseQty },
+              },
             })
             await tx.recepcionItem.create({
               data: {
                 productId: item.productId,
                 quantity: item.quantity,
+                baseQuantity: baseQty,
                 purchaseId: id,
               },
             })

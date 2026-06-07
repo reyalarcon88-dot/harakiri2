@@ -3,6 +3,7 @@ import { generatePurchaseCode } from '@/lib/purchase-code'
 import { NextResponse } from 'next/server'
 import { runPurchaseOrderAutomation } from '@/lib/server/purchase-order-automation'
 import { Prisma } from '@prisma/client'
+import { findCuttableSourcesForTarget } from '@/lib/cut-stock'
 
 export async function POST(
   request: Request,
@@ -32,7 +33,7 @@ export async function POST(
 
     const materials = await db.projectMaterials.findMany({
       where: { projectId: id },
-      include: { product: { select: { id: true, name: true, code: true } } },
+      include: { product: { select: { id: true, name: true, code: true, color: true, unitQuantity: true } } },
     })
 
     // Per-product coverage from non-cancelled purchases of this project.
@@ -67,12 +68,32 @@ export async function POST(
       }
     }
 
+    const allProducts = await db.products.findMany({
+      select: {
+        id: true,
+        code: true,
+        name: true,
+        color: true,
+        unitQuantity: true,
+        shelfStocks: {
+          select: {
+            shelfId: true,
+            quantity: true,
+            reserveQuantity: true,
+            isReserveShelf: true,
+          },
+        },
+      },
+    })
+
     // Remaining to order: plan - dispatched - already ordered - available warehouse stock.
     const missingMaterials: { productId: string; productName: string; productCode: string; needed: number }[] = []
     for (const mat of materials) {
       const purchased = purchasedByProduct.get(mat.productId) || 0
       const available = stockByProduct.get(mat.productId) || 0
-      const needed = mat.plannedQuantity - mat.dispatchedQuantity - purchased - available
+      const cuttableAvailable = findCuttableSourcesForTarget(mat.product, allProducts)
+        .reduce((sum, source) => sum + source.coveredTargetPieces, 0)
+      const needed = mat.plannedQuantity - mat.dispatchedQuantity - purchased - available - cuttableAvailable
       if (needed > 0) {
         missingMaterials.push({
           productId: mat.productId,

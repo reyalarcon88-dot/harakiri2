@@ -6,7 +6,6 @@ import {
   GalleryVerticalEnd,
   Info,
   MessageSquare,
-  Sparkles,
   Workflow,
 } from 'lucide-react'
 import { useI18n } from '@/components/layout/I18nProvider'
@@ -23,24 +22,6 @@ interface DocumentSidebarProps {
   documents: InventoryDocumentRecord[]
   onSelectDocument: (index: number) => void
   onSelectPanel: (panel: InventoryDocumentPanel) => void
-}
-
-function PlaceholderPanel({
-  title,
-  description,
-}: {
-  title: string
-  description: string
-}) {
-  return (
-    <div className="rounded-md border border-dashed border-border/80 bg-background/70 p-4">
-      <div className="mb-2 flex items-center gap-2 text-sm font-medium">
-        <Sparkles className="h-4 w-4 text-muted-foreground" />
-        {title}
-      </div>
-      <p className="text-sm leading-6 text-muted-foreground">{description}</p>
-    </div>
-  )
 }
 
 export function DocumentSidebar({
@@ -122,26 +103,6 @@ export function DocumentSidebar({
           </div>
         ) : null}
 
-        {activePanel === 'comments' ? (
-          <PlaceholderPanel
-            title={t('documents.sidebar.commentsReadyTitle')}
-            description={t('documents.sidebar.commentsReadyDescription')}
-          />
-        ) : null}
-
-        {activePanel === 'versions' ? (
-          <PlaceholderPanel
-            title={t('documents.sidebar.versionsReadyTitle')}
-            description={t('documents.sidebar.versionsReadyDescription')}
-          />
-        ) : null}
-
-        {activePanel === 'extract' ? (
-          <PlaceholderPanel
-            title={t('documents.sidebar.extractReadyTitle')}
-            description={t('documents.sidebar.extractReadyDescription')}
-          />
-        ) : null}
       </div>
     </aside>
   )

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { isProductCompatibleWithProjectColor } from '@/lib/project-color'
 import { autoPlanProjectIfNoMaterials, runProjectAutomation } from '@/lib/project-automation'
 
 export async function PATCH(
@@ -8,15 +9,24 @@ export async function PATCH(
 ) {
   try {
     const { id, materialId } = await params
-    const { productId, plannedQuantity, engineeringSection, sortOrder } = await request.json()
+    const { productId, plannedQuantity, engineeringSection, sortOrder, notes } = await request.json()
 
     if (
       productId === undefined &&
       plannedQuantity === undefined &&
       engineeringSection === undefined &&
-      sortOrder === undefined
+      sortOrder === undefined &&
+      notes === undefined
     ) {
       return NextResponse.json({ error: 'No hay cambios para actualizar' }, { status: 400 })
+    }
+
+    let nextNotes: string | undefined
+    if (notes !== undefined) {
+      if (typeof notes !== 'string') {
+        return NextResponse.json({ error: 'La nota debe ser texto' }, { status: 400 })
+      }
+      nextNotes = notes.slice(0, 500)
     }
 
     const current = await db.projectMaterials.findUnique({ where: { id: materialId } })
@@ -46,12 +56,28 @@ export async function PATCH(
         )
       }
 
-      const product = await db.products.findUnique({
-        where: { id: productId },
-        select: { id: true },
-      })
+      const [project, product] = await Promise.all([
+        db.projects.findUnique({
+          where: { id },
+          select: { id: true, color: true },
+        }),
+        db.products.findUnique({
+          where: { id: productId },
+          select: { id: true, name: true, color: true },
+        }),
+      ])
+      if (!project) {
+        return NextResponse.json({ error: 'Proyecto no encontrado' }, { status: 404 })
+      }
       if (!product) {
         return NextResponse.json({ error: 'Producto no encontrado' }, { status: 404 })
+      }
+
+      if (!isProductCompatibleWithProjectColor(project.color, product.color)) {
+        return NextResponse.json(
+          { error: `El producto ${product.name} no coincide con el color del proyecto` },
+          { status: 400 }
+        )
       }
 
       const existing = await db.projectMaterials.findFirst({
@@ -76,6 +102,7 @@ export async function PATCH(
         ...(qty !== undefined ? { plannedQuantity: qty } : {}),
         ...(engineeringSection !== undefined ? { engineeringSection } : {}),
         ...(sortOrder !== undefined ? { sortOrder } : {}),
+        ...(nextNotes !== undefined ? { notes: nextNotes } : {}),
       },
       include: { product: true },
     })

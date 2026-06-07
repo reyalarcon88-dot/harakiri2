@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { getConversionFactor, packagesToBase } from '@/lib/stock-units'
 
 export async function POST(request: NextRequest) {
   try {
@@ -23,15 +24,21 @@ export async function POST(request: NextRequest) {
 
     await db.$transaction(async (tx) => {
       for (const it of items) {
-        const recep = await tx.recepcionItem.findUnique({ where: { id: it.id } })
+        const recep = await tx.recepcionItem.findUnique({
+          where: { id: it.id },
+          include: { product: { select: { unitOfMeasure: true, unitQuantity: true } } },
+        })
         if (!recep) {
           throw new Error(`Item de recepción no encontrado: ${it.id}`)
         }
-        if (it.quantity > recep.quantity) {
+        if (it.quantity > Number(recep.quantity)) {
           throw new Error(
             `Cantidad ${it.quantity} supera lo disponible (${recep.quantity}) para el producto`
           )
         }
+
+        const factor = getConversionFactor(recep.product)
+        const baseDelta = packagesToBase(Number(it.quantity), factor)
 
         await tx.productShelfStock.upsert({
           where: {
@@ -41,17 +48,21 @@ export async function POST(request: NextRequest) {
             productId: recep.productId,
             shelfId: it.shelfId,
             quantity: it.quantity,
+            baseQuantity: baseDelta,
           },
-          update: { quantity: { increment: it.quantity } },
+          update: {
+            quantity: { increment: it.quantity },
+            baseQuantity: { increment: baseDelta },
+          },
         })
 
-        const remaining = recep.quantity - it.quantity
+        const remaining = Number(recep.quantity) - Number(it.quantity)
         if (remaining === 0) {
           await tx.recepcionItem.delete({ where: { id: it.id } })
         } else {
           await tx.recepcionItem.update({
             where: { id: it.id },
-            data: { quantity: remaining },
+            data: { quantity: remaining, baseQuantity: packagesToBase(remaining, factor) },
           })
         }
       }

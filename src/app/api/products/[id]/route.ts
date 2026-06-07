@@ -1,6 +1,7 @@
 import { db } from '@/lib/db'
 import { NextResponse } from 'next/server'
 import { NextRequest } from 'next/server'
+import { getConversionFactor, packagesToBase } from '@/lib/stock-units'
 
 export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
   try {
@@ -20,6 +21,16 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       }
     }
 
+    const nextUnitOfMeasure = unitOfMeasure !== undefined ? unitOfMeasure : existing.unitOfMeasure
+    const nextUnitQuantity = unitQuantity !== undefined ? String(unitQuantity) : existing.unitQuantity
+    const factor = getConversionFactor({
+      unitOfMeasure: nextUnitOfMeasure,
+      unitQuantity: nextUnitQuantity,
+    })
+    const baseStockUpdate = currentStock !== undefined
+      ? { currentBaseStock: packagesToBase(Number(currentStock), factor) }
+      : {}
+
     const product = await db.products.update({
       where: { id },
       data: {
@@ -31,6 +42,7 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
         ...(unitQuantity !== undefined && { unitQuantity: String(unitQuantity) }),
         ...(minStock !== undefined && { minStock }),
         ...(currentStock !== undefined && { currentStock }),
+        ...baseStockUpdate,
         ...(referencePrice !== undefined && { referencePrice }),
         ...('preferredShelfId' in body && { preferredShelfId: preferredShelfId ?? null }),
       },

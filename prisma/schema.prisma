@@ -68,6 +68,7 @@ model Products {
   unitQuantity     String  @default("") @map("unit_quantity")
   minStock         Decimal @default(0) @map("min_stock")
   currentStock     Decimal @default(0) @map("current_stock")
+  currentBaseStock Decimal @default(0) @map("current_base_stock")
   referencePrice   Float   @default(0) @map("reference_price")
   preferredShelfId String? @map("preferred_shelf_id")
   createdAt        DateTime @default(now()) @map("created_at")
@@ -92,7 +93,9 @@ model ProductShelfStock {
   productId             String  @map("product_id")
   shelfId               String  @map("shelf_id")
   quantity              Decimal @default(0)
+  baseQuantity          Decimal @default(0) @map("base_quantity")
   reserveQuantity       Decimal @default(0) @map("reserve_quantity")
+  reserveBaseQuantity   Decimal @default(0) @map("reserve_base_quantity")
   isReserveShelf        Boolean @default(false) @map("is_reserve_shelf")
   reserveMinimum        Decimal @default(0) @map("reserve_minimum")
   reserveNotes          String  @default("") @map("reserve_notes")
@@ -291,6 +294,7 @@ model ProjectMaterials {
   includeReserveStock   Boolean @default(false) @map("include_reserve_stock")
   reserveUsedQuantity   Decimal @default(0) @map("reserve_used_quantity")
   engineeringSection    String  @default("") @map("engineering_section")
+  notes             String @default("") @map("notes")
   sortOrder         Int    @default(0) @map("sort_order")
   createdAt         DateTime @default(now()) @map("created_at")
 
@@ -314,11 +318,12 @@ model Dispatches {
 }
 
 model DispatchItems {
-  id          String  @id @default(cuid())
-  dispatchId  String  @map("dispatch_id")
-  productId   String  @map("product_id")
-  shelfId     String? @map("shelf_id")
-  quantity    Decimal
+  id           String  @id @default(cuid())
+  dispatchId   String  @map("dispatch_id")
+  productId    String  @map("product_id")
+  shelfId      String? @map("shelf_id")
+  quantity     Decimal
+  baseQuantity Decimal @default(0) @map("base_quantity")
 
   dispatch Dispatches @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
   product  Products   @relation(fields: [productId], references: [id])
@@ -349,6 +354,8 @@ model ReturnItems {
   productIdReturned     String? @map("product_id_returned")
   quantityDelivered     Decimal @map("quantity_delivered")
   quantityReturned      Decimal @map("quantity_returned")
+  baseQuantityDelivered Decimal @default(0) @map("base_quantity_delivered")
+  baseQuantityReturned  Decimal @default(0) @map("base_quantity_returned")
   shelfIdFrom           String? @map("shelf_id_from")
   shelfIdTo             String? @map("shelf_id_to")
   changeType            String  @default("full_return") @map("change_type")
@@ -372,6 +379,7 @@ model Transfers {
   toShelfId    String   @map("to_shelf_id")
   productId    String   @map("product_id")
   quantity     Decimal
+  baseQuantity Decimal  @default(0) @map("base_quantity")
   transferDate String   @map("transfer_date")
   notes        String   @default("")
   createdAt    DateTime @default(now()) @map("created_at")
@@ -541,10 +549,11 @@ model MaterialTemplateItems {
 }
 
 model RecepcionItem {
-  id         String   @id @default(cuid())
-  productId  String   @map("product_id")
-  quantity   Decimal
-  purchaseId String?  @map("purchase_id")
+  id           String   @id @default(cuid())
+  productId    String   @map("product_id")
+  quantity     Decimal
+  baseQuantity Decimal  @default(0) @map("base_quantity")
+  purchaseId   String?  @map("purchase_id")
   returnId   String?  @map("return_id")
   notes      String   @default("")
   createdAt  DateTime @default(now()) @map("created_at")

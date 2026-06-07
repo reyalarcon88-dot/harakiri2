@@ -29,6 +29,71 @@ export function resolveDocumentUrl(document: InventoryDocumentRecord) {
   return `/${document.fileUrl.replace(/^\/+/, '')}`
 }
 
+function buildDocumentFavicon(kind: DocumentPreviewKind): string {
+  switch (kind) {
+    case 'pdf':
+      return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+        '<path fill="#e53935" d="M6 2h14l6 6v22a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>' +
+        '<path fill="#ffcdd2" d="M20 2v6h6z"/>' +
+        '<text x="16" y="24" text-anchor="middle" font-family="Arial,sans-serif" font-size="9" font-weight="bold" fill="#fff">PDF</text>' +
+        '</svg>'
+      )
+    case 'image':
+      return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+        '<path fill="#43a047" d="M6 2h14l6 6v22a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>' +
+        '<path fill="#c8e6c9" d="M20 2v6h6z"/>' +
+        '<circle cx="13" cy="18" r="2" fill="#fff"/>' +
+        '<path fill="#fff" d="M9 26l4-5 3 3 4-6 4 8z"/>' +
+        '</svg>'
+      )
+    case 'text':
+      return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+        '<path fill="#1e88e5" d="M6 2h14l6 6v22a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>' +
+        '<path fill="#bbdefb" d="M20 2v6h6z"/>' +
+        '<rect x="8" y="14" width="16" height="1.5" fill="#fff"/>' +
+        '<rect x="8" y="18" width="16" height="1.5" fill="#fff"/>' +
+        '<rect x="8" y="22" width="10" height="1.5" fill="#fff"/>' +
+        '</svg>'
+      )
+    default:
+      return (
+        '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">' +
+        '<path fill="#757575" d="M6 2h14l6 6v22a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2z"/>' +
+        '<path fill="#e0e0e0" d="M20 2v6h6z"/>' +
+        '</svg>'
+      )
+  }
+}
+
+export function openDocumentInNewTab(document: InventoryDocumentRecord) {
+  const url = resolveDocumentUrl(document)
+  const win = window.open('', '_blank')
+  if (!win) {
+    window.open(url, '_blank', 'noopener,noreferrer')
+    return
+  }
+  const escape = (s: string) =>
+    s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;')
+  const title = escape(document.fileName)
+  const safeUrl = escape(url)
+  const faviconSvg = buildDocumentFavicon(getDocumentPreviewKind(document))
+  const faviconHref = `data:image/svg+xml;utf8,${encodeURIComponent(faviconSvg)}`
+  win.document.open()
+  win.document.write(
+    `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${title}</title>` +
+    `<link rel="icon" type="image/svg+xml" href="${faviconHref}">` +
+    `<style>html,body{margin:0;padding:0;height:100%;background:#1f1f1f}` +
+    `iframe,embed,img{width:100vw;height:100vh;border:0;display:block}` +
+    `img{object-fit:contain}</style></head>` +
+    `<body><iframe src="${safeUrl}" title="${title}"></iframe></body></html>`
+  )
+  win.document.close()
+  win.document.title = document.fileName
+}
+
 export function buildDocumentDownloadUrl(document: InventoryDocumentRecord) {
   if (document.downloadUrl) {
     return document.downloadUrl

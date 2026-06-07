@@ -5,6 +5,7 @@ import {
   incrementProjectDispatchQuantities,
   ProjectDispatchValidationError,
 } from '@/lib/server/project-dispatch'
+import { getConversionFactor, packagesToBase } from '@/lib/stock-units'
 
 export async function POST(request: NextRequest) {
   try {
@@ -38,7 +39,10 @@ export async function POST(request: NextRequest) {
     const result = await db.$transaction(async (tx) => {
       const recepcionItems = await Promise.all(
         items.map(async (item) => {
-          const recep = await tx.recepcionItem.findUnique({ where: { id: item.id } })
+          const recep = await tx.recepcionItem.findUnique({
+            where: { id: item.id },
+            include: { product: { select: { unitOfMeasure: true, unitQuantity: true } } },
+          })
           if (!recep) {
             throw new ProjectDispatchValidationError(`Item de recepcion no encontrado: ${item.id}`)
           }
@@ -48,12 +52,14 @@ export async function POST(request: NextRequest) {
               `Cantidad ${item.quantity} supera lo disponible (${availableQuantity})`
             )
           }
-
+          const factor = getConversionFactor(recep.product)
           return {
             id: item.id,
             productId: recep.productId,
             availableQuantity,
             quantity: item.quantity,
+            factor,
+            baseDelta: packagesToBase(item.quantity, factor),
           }
         })
       )
@@ -80,12 +86,16 @@ export async function POST(request: NextRequest) {
             productId: item.productId,
             shelfId: null,
             quantity: item.quantity,
+            baseQuantity: item.baseDelta,
           },
         })
 
         await tx.products.update({
           where: { id: item.productId },
-          data: { currentStock: { decrement: item.quantity } },
+          data: {
+            currentStock: { decrement: item.quantity },
+            currentBaseStock: { decrement: item.baseDelta },
+          },
         })
 
         const remaining = item.availableQuantity - item.quantity
@@ -94,7 +104,7 @@ export async function POST(request: NextRequest) {
         } else {
           await tx.recepcionItem.update({
             where: { id: item.id },
-            data: { quantity: remaining },
+            data: { quantity: remaining, baseQuantity: packagesToBase(remaining, item.factor) },
           })
         }
       }

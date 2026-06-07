@@ -8,7 +8,6 @@ import { useI18n } from '@/components/layout/I18nProvider'
 import { ConfirmDeleteDialog } from '@/components/shared/ConfirmDeleteDialog'
 import { DocumentHeader } from '@/components/documents/DocumentHeader'
 import { DocumentPreview } from '@/components/documents/DocumentPreview'
-import { DocumentSidebar } from '@/components/documents/DocumentSidebar'
 import { DocumentToolbar } from '@/components/documents/DocumentToolbar'
 import { Button } from '@/components/ui/button'
 import {
@@ -127,8 +126,8 @@ function DocumentViewerSession({
           onClose={closeViewer}
         />
 
-        <div className="grid min-h-0 flex-1 grid-cols-1 xl:grid-cols-[minmax(0,1fr)_320px]">
-          <div className="relative flex min-h-0 flex-col">
+        <div className="flex min-h-0 flex-1">
+          <div className="relative flex min-h-0 flex-1 flex-col">
             <div className="relative min-h-0 flex-1">
               {documents.length > 1 ? (
                 <>
@@ -190,14 +189,6 @@ function DocumentViewerSession({
             />
           </div>
 
-          <DocumentSidebar
-            activePanel={activePanel}
-            currentDocument={currentDocument}
-            currentIndex={currentIndex}
-            documents={documents}
-            onSelectDocument={setCurrentIndex}
-            onSelectPanel={setActivePanel}
-          />
         </div>
       </div>
 

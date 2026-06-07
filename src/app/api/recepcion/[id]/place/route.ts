@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { getConversionFactor, packagesToBase } from '@/lib/stock-units'
 
 export async function POST(
   request: NextRequest,
@@ -17,21 +18,26 @@ export async function POST(
       )
     }
 
-    const recepcionItem = await db.recepcionItem.findUnique({ where: { id } })
+    const recepcionItem = await db.recepcionItem.findUnique({
+      where: { id },
+      include: { product: { select: { unitOfMeasure: true, unitQuantity: true } } },
+    })
 
     if (!recepcionItem) {
       return NextResponse.json({ error: 'Item no encontrado en recepción' }, { status: 404 })
     }
 
-    if (quantity > recepcionItem.quantity) {
+    if (quantity > Number(recepcionItem.quantity)) {
       return NextResponse.json(
         { error: 'La cantidad supera lo disponible en recepción' },
         { status: 400 }
       )
     }
 
+    const factor = getConversionFactor(recepcionItem.product)
+    const baseDelta = packagesToBase(Number(quantity), factor)
+
     await db.$transaction(async (tx) => {
-      // Move stock to the target shelf
       await tx.productShelfStock.upsert({
         where: {
           productId_shelfId: {
@@ -43,20 +49,22 @@ export async function POST(
           productId: recepcionItem.productId,
           shelfId,
           quantity,
+          baseQuantity: baseDelta,
         },
         update: {
           quantity: { increment: quantity },
+          baseQuantity: { increment: baseDelta },
         },
       })
 
-      // Reduce or remove the recepcion item
-      const remaining = recepcionItem.quantity - quantity
+      const remaining = Number(recepcionItem.quantity) - Number(quantity)
       if (remaining === 0) {
         await tx.recepcionItem.delete({ where: { id } })
       } else {
+        const remainingBase = packagesToBase(remaining, factor)
         await tx.recepcionItem.update({
           where: { id },
-          data: { quantity: remaining },
+          data: { quantity: remaining, baseQuantity: remainingBase },
         })
       }
     })

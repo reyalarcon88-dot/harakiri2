@@ -5,6 +5,26 @@ const taskProjectSelect = {
   id: true,
   name: true,
   poNumber: true,
+  startDate: true,
+  status: true,
+  materials: {
+    select: { plannedQuantity: true, dispatchedQuantity: true },
+  },
+} as const
+
+function enrichTaskProject<T extends { project: any | null }>(task: T): T {
+  if (!task.project || !Array.isArray(task.project.materials)) return task
+  const { materials, ...rest } = task.project as { materials: Array<{ plannedQuantity: number; dispatchedQuantity: number }>; [k: string]: unknown }
+  const plannedTotal = materials.reduce((a, m) => a + (Number(m.plannedQuantity) || 0), 0)
+  const dispatchedTotal = materials.reduce((a, m) => a + (Number(m.dispatchedQuantity) || 0), 0)
+  return {
+    ...task,
+    project: {
+      ...rest,
+      materialsPlannedTotal: plannedTotal,
+      materialsDispatchedTotal: dispatchedTotal,
+    },
+  } as T
 }
 
 function nullableString(value: unknown) {
@@ -34,7 +54,7 @@ export async function GET(
       return NextResponse.json({ error: 'Tarea no encontrada' }, { status: 404 })
     }
 
-    return NextResponse.json(task)
+    return NextResponse.json(enrichTaskProject(task))
   } catch (error) {
     console.error('Error al obtener tarea:', error)
     return NextResponse.json({ error: 'Error al obtener tarea' }, { status: 500 })
@@ -103,7 +123,7 @@ export async function PUT(
       },
     })
 
-    return NextResponse.json(task)
+    return NextResponse.json(enrichTaskProject(task))
   } catch (error) {
     console.error('Error al actualizar tarea:', error)
     return NextResponse.json({ error: 'Error al actualizar tarea' }, { status: 500 })

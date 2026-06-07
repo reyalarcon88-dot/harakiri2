@@ -5,7 +5,7 @@ import { useI18n } from '@/components/layout/I18nProvider'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import type { InventoryDocumentRecord } from '@/types/documents'
-import { getEntityLabel, resolveDocumentUrl } from '@/lib/document-utils'
+import { getEntityLabel, openDocumentInNewTab } from '@/lib/document-utils'
 
 interface DocumentHeaderProps {
   document: InventoryDocumentRecord
@@ -76,11 +76,14 @@ export function DocumentHeader({
         </div>
 
         <div className="flex items-center gap-2 self-start">
-          <Button variant="outline" size="sm" asChild className="gap-2 rounded-md">
-            <a href={resolveDocumentUrl(document)} target="_blank" rel="noopener noreferrer">
-              <ExternalLink className="h-4 w-4" />
-              {t('documents.header.openExternal')}
-            </a>
+          <Button
+            variant="outline"
+            size="sm"
+            className="gap-2 rounded-md"
+            onClick={() => openDocumentInNewTab(document)}
+          >
+            <ExternalLink className="h-4 w-4" />
+            {t('documents.header.openExternal')}
           </Button>
           <Button variant="ghost" size="icon" onClick={onClose} className="rounded-md">
             <X className="h-4 w-4" />

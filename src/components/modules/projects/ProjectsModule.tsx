@@ -1,7 +1,7 @@
 'use client'
 
-import { compareStructuralFrameMaterials, compareFastenerMaterials, getProductFamily, compareMaterialsByDimensions } from '@/lib/structural-frame-sort'
-import { useState, useRef, useMemo, useEffect, type KeyboardEvent } from 'react'
+import { compareStructuralFrameMaterials, compareFastenerMaterials, extractDimensions, getProductFamily, compareMaterialsByDimensions } from '@/lib/structural-frame-sort'
+import { useState, useRef, useMemo, useEffect, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
 import {
@@ -18,6 +18,7 @@ import {
   FileText,
   Search,
   ChevronDown,
+  ChevronUp,
   ChevronRight,
   X,
   Trash2,
@@ -30,6 +31,7 @@ import {
   ClipboardList,
   Layers,
   Maximize2,
+  Minimize2,
   ShoppingBag,
   Copy,
   Inbox,
@@ -50,14 +52,27 @@ import {
   MapPin,
   Phone,
   StickyNote,
+  Columns2,
   Wand2,
+  PrinterCheck,
+  Settings2,
+  CheckCircle,
+  type LucideIcon,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Input } from '@/components/ui/input'
 import { Badge } from '@/components/ui/badge'
-import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { Tabs, TabsContent } from '@/components/ui/tabs'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription } from '@/components/ui/dialog'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -70,13 +85,23 @@ import { Skeleton } from '@/components/ui/skeleton'
 import { Separator } from '@/components/ui/separator'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
+import { useSidebar } from '@/components/ui/sidebar'
 import { useI18n } from '@/components/layout/I18nProvider'
 import { EmptyState } from '@/components/shared/EmptyState'
 import { ProjectStatusBadge } from '@/components/shared/ProjectStatusBadge'
 import { MaterialProgressBar } from '@/components/shared/MaterialProgressBar'
 import { ProjectNotesFeed } from '@/components/modules/projects/ProjectNotesFeed'
+import {
+  CollapsedListStrip,
+  MaterialsCompactView,
+  PlanPdfPane,
+  SplitDragHandle,
+  useSplitViewSettings,
+  type CompactMaterial,
+} from '@/components/modules/projects/MaterialsPlanWorkspace'
 import { ConfirmDeleteDialog } from '@/components/shared/ConfirmDeleteDialog'
 import { ProjectEngineeringDialog } from '@/components/modules/projects/ProjectEngineeringDialog'
+import { ProjectPendingsPad } from '@/components/modules/projects/ProjectPendingsPad'
 import dynamic from 'next/dynamic'
 
 const ProjectExpensesTab = dynamic(
@@ -92,6 +117,12 @@ import { getMaterialProgressTotals } from '@/lib/project-material-progress'
 import { getSectionOrder } from '@/lib/engineering-sections'
 import { isProductCompatibleWithProjectColor } from '@/lib/project-color'
 import { PROJECT_PHASE_COLOR_CLASS, PROJECT_PHASE_PRESETS } from '@/lib/project-phases'
+import {
+  computeCutPlan,
+  detectCutLength,
+  findCuttableSourcesForTarget,
+  type CuttableSource,
+} from '@/lib/cut-stock'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -102,9 +133,10 @@ interface ProjectMaterial {
   plannedQuantity: number
   dispatchedQuantity: number
   engineeringSection?: string
+  notes?: string
   sortOrder?: number
   createdAt?: string
-  product: { id: string; name: string; code: string; unitQuantity?: string | number; engineeringSection?: string; referencePrice?: number; currentStock?: number; _totalShelfStock?: number }
+  product: { id: string; name: string; code: string; color?: string; unitQuantity?: string | number; engineeringSection?: string; referencePrice?: number; currentStock?: number; _totalShelfStock?: number }
 }
 
 interface DispatchItem {
@@ -314,9 +346,36 @@ interface RecepcionListItem {
     id: string
     project?: { id: string; name: string; poNumber?: string } | null
   } | null
+  sourceProjectId?: string | null
+  sourceProjectName?: string | null
 }
 
 const EMPTY_RECEPCION_ITEMS: RecepcionListItem[] = []
+
+// Cross-cut candidate: a recepción item of a LONGER product that can be cut into
+// the project's planned (shorter) product. The frontend shows these in the cut
+// picker alongside shelf-based candidates, distinguished by a "Recepción" badge.
+interface ProjectRecepcionCutCandidate {
+  recepcionItemId: string
+  sourceProduct: { id: string; code: string; name: string; unitOfMeasure: string }
+  targetProduct: { id: string; code: string; name: string }
+  sourceProjectId: string | null
+  sourceProjectName: string | null
+  purchaseCode: string | null
+  poNumber: string | null
+  originalSize: number
+  targetSize: number
+  pieces: number
+}
+
+interface ProjectRecepcionResponse {
+  own: RecepcionListItem[]
+  crossProject: RecepcionListItem[]
+  crossCut: ProjectRecepcionCutCandidate[]
+}
+
+const EMPTY_PROJECT_RECEPCION: ProjectRecepcionResponse = { own: [], crossProject: [], crossCut: [] }
+const EMPTY_RECEPCION_CUT_CANDIDATES: ProjectRecepcionCutCandidate[] = []
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 
@@ -498,6 +557,103 @@ function getStatusOptions(t: (key: MessageKey, values?: Record<string, string | 
   }))
 }
 
+// ──────────────────────────────────────────────────────────────────────────
+// ProjectStatusPicker — Badge clickable que abre un popover para cambiar el estado
+// rápidamente sin necesidad de ir a la info del proyecto.
+// ──────────────────────────────────────────────────────────────────────────
+
+const STATUS_PICKER_OPTIONS: { value: 'planned' | 'scheduled' | 'in_progress' | 'dispatched' | 'finished'; icon: LucideIcon; bg: string; text: string; border: string }[] = [
+  { value: 'planned',     icon: ClipboardList, bg: 'bg-teal-50',    text: 'text-teal-700',    border: 'border-teal-200' },
+  { value: 'scheduled',   icon: CalendarDays,  bg: 'bg-sky-50',     text: 'text-sky-700',     border: 'border-sky-200' },
+  { value: 'in_progress', icon: Clock,         bg: 'bg-cyan-50',    text: 'text-cyan-700',    border: 'border-cyan-200' },
+  { value: 'dispatched',  icon: Truck,         bg: 'bg-emerald-100',text: 'text-emerald-700', border: 'border-emerald-200' },
+  { value: 'finished',    icon: CheckCircle,   bg: 'bg-emerald-100',text: 'text-emerald-700', border: 'border-emerald-200' },
+]
+
+interface ProjectStatusPickerProps {
+  status: string
+  onChange: (newStatus: string) => void
+  hasStartDate: boolean
+  hasMaterials: boolean
+  disabled?: boolean
+}
+
+function ProjectStatusPicker({ status, onChange, hasStartDate, hasMaterials, disabled }: ProjectStatusPickerProps) {
+  const { t } = useI18n()
+  const [open, setOpen] = useState(false)
+
+  // Si el proyecto está cancelado, el badge es de solo lectura (cancelación
+  // tiene su propio flujo con confirmación). 'Finished' SÍ se puede cambiar
+  // (puede revertirse a Dispatched si fuera necesario).
+  if (disabled || status === 'cancelled') {
+    return <ProjectStatusBadge status={status} />
+  }
+
+  const handleSelect = (newStatus: string) => {
+    if (newStatus === status) {
+      setOpen(false)
+      return
+    }
+    // Validación para 'scheduled': requiere startDate y materiales
+    if (newStatus === 'scheduled' && (!hasStartDate || !hasMaterials)) {
+      toast.error(
+        !hasStartDate && !hasMaterials
+          ? 'Scheduled projects need a start date and materials list'
+          : !hasStartDate
+            ? 'Scheduled projects need a start date'
+            : 'Scheduled projects need a materials list'
+      )
+      setOpen(false)
+      return
+    }
+    onChange(newStatus)
+    setOpen(false)
+  }
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger asChild>
+        <button
+          type="button"
+          className="inline-flex items-center gap-1 rounded-md transition hover:ring-2 hover:ring-offset-1 hover:ring-slate-200 focus:outline-none focus:ring-2 focus:ring-offset-1 focus:ring-slate-300 cursor-pointer"
+          title={t('projects.actions.changeStatus')}
+        >
+          <ProjectStatusBadge status={status} />
+          <ChevronDown className="h-3 w-3 text-muted-foreground" />
+        </button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-56 p-1.5">
+        <div className="px-2 py-1.5 text-[10px] font-bold uppercase tracking-wide text-muted-foreground">
+          Cambiar estado
+        </div>
+        <div className="space-y-0.5">
+          {STATUS_PICKER_OPTIONS.map((opt) => {
+            const Icon = opt.icon
+            const isCurrent = opt.value === status
+            return (
+              <button
+                key={opt.value}
+                type="button"
+                onClick={() => handleSelect(opt.value)}
+                disabled={isCurrent}
+                className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-xs font-medium transition disabled:cursor-default disabled:opacity-100 ${
+                  isCurrent
+                    ? `${opt.bg} ${opt.text} border ${opt.border}`
+                    : 'hover:bg-muted text-foreground border border-transparent'
+                }`}
+              >
+                <Icon className={`h-3.5 w-3.5 ${isCurrent ? opt.text : 'text-muted-foreground'}`} />
+                <span className="flex-1 text-left">{t(getProjectStatusLabelKey(opt.value))}</span>
+                {isCurrent && <Check className="h-3 w-3 text-emerald-600" />}
+              </button>
+            )
+          })}
+        </div>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
 function getProjectColorLabel(
   color: string,
   t: (key: MessageKey, values?: Record<string, string | number>) => string
@@ -572,9 +728,19 @@ function calcPendingActionCount(project: Project, products: Product[] = []): num
       materialProduct._totalShelfStock ??
       materialProduct.currentStock ??
       0
+    const cuttableStock = findCuttableSourcesForTarget(
+      {
+        id: material.productId,
+        code: material.product.code,
+        name: material.product.name,
+        color: material.product.color,
+        unitQuantity: material.product.unitQuantity,
+      },
+      products,
+    ).reduce((sum, source) => sum + source.coveredTargetPieces, 0)
     const purchased = purchasedByProduct.get(material.productId) || 0
-    const uncovered = Math.max(remaining - purchased - inStock, 0)
-    const canDispatch = inStock > 0
+    const uncovered = Math.max(remaining - purchased - inStock - cuttableStock, 0)
+    const canDispatch = inStock > 0 || cuttableStock > 0
     const needsPurchase = uncovered > 0
 
     return count + (canDispatch ? 1 : 0) + (needsPurchase ? 1 : 0)
@@ -934,6 +1100,72 @@ export function ProjectsModule() {
       phaseTypes={phaseTypes}
       recepcionItems={recepcionItems}
     />
+  )
+}
+
+// ─── Existing Projects Warning ────────────────────────────────────────────────
+// Soft warning that surfaces a client's existing projects while filling the
+// "New project" form, so the user can open the one they forgot they had
+// instead of creating a duplicate. Filters out cancelled projects, sorts by
+// createdAt desc, caps at 5.
+
+interface ExistingProjectsWarningProps {
+  clientId: string
+  projects: Project[]
+  onSelectExisting: (id: string) => void
+}
+
+function ExistingProjectsWarning({ clientId, projects, onSelectExisting }: ExistingProjectsWarningProps) {
+  const { locale } = useI18n()
+  const matches = useMemo(() => {
+    if (!clientId) return []
+    return projects
+      .filter((p) => p.clientId === clientId && p.status !== 'cancelled')
+      .sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''))
+      .slice(0, 5)
+  }, [clientId, projects])
+
+  if (matches.length === 0) return null
+
+  return (
+    <div className="mt-2 rounded-lg border border-amber-200 bg-gradient-to-b from-amber-50 to-amber-50/40 px-3 py-2.5">
+      <div className="flex items-start gap-2">
+        <CircleAlert className="mt-0.5 h-4 w-4 shrink-0 text-amber-600" />
+        <div className="min-w-0 flex-1">
+          <div className="text-[12.5px] font-semibold text-amber-800">
+            Este cliente ya tiene {matches.length} proyecto{matches.length !== 1 ? 's' : ''}
+          </div>
+          <div className="text-[11.5px] text-amber-700">
+            ¿Querés abrir alguno en vez de crear uno nuevo?
+          </div>
+        </div>
+      </div>
+      <div className="mt-2 space-y-1.5">
+        {matches.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => onSelectExisting(p.id)}
+            className="group flex w-full items-center gap-2.5 rounded-md border border-amber-200 bg-white px-2.5 py-1.5 text-left transition hover:border-amber-300 hover:bg-amber-50/60 hover:shadow-sm"
+          >
+            <div className="min-w-0 flex-1">
+              <div className="truncate text-[13px] font-semibold text-slate-800">{p.name}</div>
+              <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11px] text-slate-500">
+                <span>Creado {formatLocaleDate(locale, p.createdAt, { day: 'numeric', month: 'short', year: 'numeric' }) || '—'}</span>
+                {p.poNumber && (
+                  <>
+                    <span className="text-slate-300">·</span>
+                    <span>PO {p.poNumber}</span>
+                  </>
+                )}
+              </div>
+            </div>
+            <ProjectStatusBadge status={p.status} />
+            <span className="shrink-0 text-amber-600 transition group-hover:translate-x-0.5">→</span>
+          </button>
+        ))}
+      </div>
+    </div>
   )
 }
 
@@ -1479,6 +1711,14 @@ function ProjectListView({
                   <Plus className="h-4 w-4" />
                 </Button>
               </div>
+              <ExistingProjectsWarning
+                clientId={newProject.clientId}
+                projects={allProjects}
+                onSelectExisting={(id) => {
+                  setCreateOpen(false)
+                  onSelectProject(id)
+                }}
+              />
             </div>
             <div className="space-y-2">
               <Label>{t('projects.fields.contractor')}</Label>
@@ -2023,10 +2263,99 @@ function ProjectDetailView({
   const openPurchase = useNavigationStore((state) => state.openPurchase)
   const [deleteOpen, setDeleteOpen] = useState(false)
   const [cancelOpen, setCancelOpen] = useState(false)
-  const [editNotes, setEditNotes] = useState(false)
-  const [notesInput, setNotesInput] = useState('')
   const [addMaterialSignal, setAddMaterialSignal] = useState(0)
+  const [activeProjectTab, setActiveProjectTab] = useState('materials')
   const viewerDocuments = useMemo(() => project ? buildProjectViewerDocuments(project, locale, t) : [], [project, locale, t])
+
+  // Workspace split view + UX prefs (header slim/collapsed, list collapsed) — persiste por proyecto
+  const splitView = useSplitViewSettings(project?.id || '')
+
+  // Modo "Enfocar plano": colapsa sidebar + lista + header en un click. Estado de sesión, no persiste.
+  const [focusMode, setFocusMode] = useState(false)
+  const focusRestoreRef = useRef<{
+    listCollapsed: boolean
+    headerCollapsed: boolean
+    sidebarOpen: boolean
+  } | null>(null)
+
+  // Auto-colapsar sidebar al activar split mode; restaurar al desactivar
+  const { setOpen: setSidebarOpen, open: sidebarOpen } = useSidebar()
+  const prevSidebarOpenRef = useRef<boolean | null>(null)
+  useEffect(() => {
+    if (splitView.enabled) {
+      if (prevSidebarOpenRef.current === null) {
+        prevSidebarOpenRef.current = sidebarOpen
+      }
+      setSidebarOpen(false)
+    } else if (prevSidebarOpenRef.current !== null) {
+      setSidebarOpen(prevSidebarOpenRef.current)
+      prevSidebarOpenRef.current = null
+    }
+
+    return () => {
+      if (splitView.enabled && prevSidebarOpenRef.current !== null) {
+        setSidebarOpen(prevSidebarOpenRef.current)
+        prevSidebarOpenRef.current = null
+      }
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [splitView.enabled, setSidebarOpen])
+
+  const toggleFocusMode = useCallback(() => {
+    if (focusMode) {
+      // Restaurar
+      if (focusRestoreRef.current) {
+        splitView.setListCollapsed(focusRestoreRef.current.listCollapsed)
+        splitView.setHeaderCollapsed(focusRestoreRef.current.headerCollapsed)
+        setSidebarOpen(focusRestoreRef.current.sidebarOpen)
+        focusRestoreRef.current = null
+      }
+      setFocusMode(false)
+    } else {
+      // Guardar y colapsar todo
+      focusRestoreRef.current = {
+        listCollapsed: splitView.listCollapsed,
+        headerCollapsed: splitView.headerCollapsed,
+        sidebarOpen,
+      }
+      splitView.setListCollapsed(true)
+      splitView.setHeaderCollapsed(true)
+      setSidebarOpen(false)
+      setFocusMode(true)
+    }
+  }, [focusMode, splitView, sidebarOpen, setSidebarOpen])
+
+  // Atajos de teclado: [ lista · ] header · f enfoque (solo cuando no escribiendo en un input)
+  useEffect(() => {
+    function handler(e: globalThis.KeyboardEvent) {
+      const target = e.target as HTMLElement | null
+      if (
+        target &&
+        (target.tagName === 'INPUT' ||
+          target.tagName === 'TEXTAREA' ||
+          target.isContentEditable)
+      ) {
+        return
+      }
+      if (e.metaKey || e.ctrlKey || e.altKey) return
+      if (e.key === '[') {
+        if (splitView.enabled) splitView.setListCollapsed(!splitView.listCollapsed)
+      } else if (e.key === ']') {
+        splitView.setHeaderCollapsed(!splitView.headerCollapsed)
+      } else if (e.key === 'f' || e.key === 'F') {
+        if (splitView.enabled) toggleFocusMode()
+      }
+    }
+    window.addEventListener('keydown', handler)
+    return () => window.removeEventListener('keydown', handler)
+  }, [splitView, toggleFocusMode])
+
+  useEffect(() => {
+    if (!splitView.enabled && focusMode) {
+      focusRestoreRef.current = null
+      setFocusMode(false)
+    }
+  }, [splitView.enabled, focusMode])
 
   if (loading || !project) {
     return (
@@ -2044,9 +2373,32 @@ function ProjectDetailView({
   const totalDispatched = materialTotals.dispatched
   const canCancel = !['finished', 'cancelled'].includes(project.status)
   const canFinish = project.status === 'dispatched'
+  const isPostDispatch = project.status === 'finished' || project.status === 'cancelled'
   const activePurchases = (project.purchases || [])
     .filter((purchase) => purchase.status !== 'cancelled')
     .sort((a, b) => (b.purchaseDate || '').localeCompare(a.purchaseDate || ''))
+  const { plannedBudget: headerPlannedBudget, totalExpense: headerTotalExpense } = getProjectBudgetStats(project)
+  const headerBudgetText = `Gasto ${formatCurrency(locale, headerTotalExpense)} / Presupuesto ${formatCurrency(locale, headerPlannedBudget)}`
+  const materialProgressText = totalPlanned > 0
+    ? `${formatLocaleInteger(locale, totalDispatched)} / ${formatLocaleInteger(locale, totalPlanned)} unidades`
+    : 'Sin materiales'
+  const materialProgressMini = (
+    <div className="w-[260px] max-w-[28vw] text-center">
+      <div className="mb-0.5 flex items-center justify-center gap-1.5 text-[11px] font-semibold text-teal-700">
+        <span>Materiales</span>
+        <span>{progress}%</span>
+        <span className="font-medium text-muted-foreground">-</span>
+        <span className="font-medium tabular-nums text-teal-700">{materialProgressText}</span>
+      </div>
+      <div className="flex items-center gap-1.5">
+        <div className="h-1 flex-1 overflow-hidden rounded-full bg-muted">
+          <div className="h-full rounded-full bg-teal-500" style={{ width: `${progress}%` }} />
+        </div>
+        <span className="w-6 text-left text-[10px] tabular-nums text-muted-foreground">{progress}%</span>
+      </div>
+    </div>
+  )
+  const detailZoomStyle = splitView.enabled ? undefined : { zoom: 0.9 }
 
   const openPlanViewer = () => {
     if (viewerDocuments.length === 0) {
@@ -2062,186 +2414,323 @@ function ProjectDetailView({
     })
   }
 
+  const openProjectTab = (tab: string) => {
+    if (tab !== 'materials' && splitView.enabled) {
+      splitView.setEnabled(false)
+    }
+    setActiveProjectTab(tab)
+  }
+
+  const projectSectionMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="outline" size="sm" className="h-7 gap-1.5 px-2 text-xs">
+          <FolderKanban className="h-3.5 w-3.5" />
+          Proyecto
+          <ChevronDown className="h-3.5 w-3.5" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuLabel>Secciones</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => openProjectTab('info')}>
+          <ClipboardList className="mr-2 h-4 w-4" />
+          {t('projects.tabs.info')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openProjectTab('materials')}>
+          <Package className="mr-2 h-4 w-4" />
+          {t('projects.tabs.materials')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openProjectTab('phases')}>
+          <Layers className="mr-2 h-4 w-4" />
+          Fases
+        </DropdownMenuItem>
+        {!isPostDispatch && (
+          <DropdownMenuItem onSelect={() => openProjectTab('dispatches')}>
+            <Truck className="mr-2 h-4 w-4" />
+            {t('projects.tabs.dispatches')}
+          </DropdownMenuItem>
+        )}
+        <DropdownMenuItem onSelect={() => openProjectTab('returns')}>
+          <RotateCcw className="mr-2 h-4 w-4" />
+          {t('projects.tabs.returns')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openProjectTab('documents')}>
+          <FileText className="mr-2 h-4 w-4" />
+          {t('projects.tabs.documents')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openProjectTab('notes')}>
+          <StickyNote className="mr-2 h-4 w-4" />
+          Notas
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => openProjectTab('expenses')}>
+          <Receipt className="mr-2 h-4 w-4" />
+          {t('projects.tabs.expenses')}
+        </DropdownMenuItem>
+        <DropdownMenuSeparator />
+        <DropdownMenuItem onSelect={() => setAddMaterialSignal((value) => value + 1)}>
+          <Plus className="mr-2 h-4 w-4" />
+          {t('projects.actions.addMaterial')}
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={openPlanViewer}>
+          <Eye className="mr-2 h-4 w-4" />
+          {t('projects.actions.showPlan')}
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+
   return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="sticky top-2 z-30 rounded-lg border bg-card/95 p-5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/90">
-        <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:items-start">
-        <div className="flex min-w-0 items-start gap-3">
-          <Button variant="outline" size="icon" onClick={onBack} className="shrink-0">
-            <ArrowLeft className="h-5 w-5" />
+    <div className={splitView.enabled ? 'space-y-2' : 'space-y-6'} style={detailZoomStyle}>
+      {splitView.headerCollapsed ? (
+        <div className="sticky top-2 z-30 flex min-h-7 items-center gap-2 rounded-md border bg-card/95 px-2 py-1 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/90">
+          <Button variant="ghost" size="icon" onClick={onBack} className="h-6 w-6 shrink-0" title="Volver">
+            <ArrowLeft className="h-3.5 w-3.5" />
           </Button>
-          <div className="min-w-0">
-            <div className="flex flex-wrap items-center gap-2">
-              {project.poNumber && (
-                <span className="rounded-md border border-teal-200 bg-teal-50 px-2 py-1 font-mono text-xs font-semibold text-teal-800">
-                  PO {project.poNumber}
-                </span>
-              )}
-              {project.projectType && (
-                <span className="rounded-md border border-sky-200 bg-sky-50 px-2 py-1 text-xs font-semibold text-sky-800">
-                  {project.projectType}
-                </span>
-              )}
-              <ProjectStatusBadge status={project.status} />
-              {project.color && (
-                <span className={`inline-flex items-center gap-1.5 rounded-md border px-2 py-1 text-xs font-semibold ${
-                  project.color === 'Blanco'
-                    ? 'border-slate-300 bg-slate-50 text-slate-700'
-                    : 'border-amber-400 bg-amber-50 text-amber-800'
-                }`}>
-                  <span className={`w-2.5 h-2.5 rounded-full ${project.color === 'Blanco' ? 'bg-slate-300 border border-slate-400' : 'bg-amber-500'}`} />
-                  {getProjectColorLabel(project.color, t)}
-                </span>
-              )}
-            </div>
-            <h1 className="mt-2 text-2xl font-semibold tracking-tight">{project.name}</h1>
-            <p className="mt-1 text-sm text-muted-foreground">{project.client.name}</p>
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-xs font-semibold leading-none">{project.name}</div>
           </div>
-        </div>
-        <div className="flex justify-center">
-          <HeaderBudgetSummary project={project} />
-        </div>
-        <div className="flex items-center gap-2 flex-wrap xl:justify-end">
-            {activePurchases.map((purchase) => (
-              <Button
-                key={purchase.id}
-                variant="outline"
-                size="sm"
-                onClick={() => openPurchase(purchase.id)}
-                className="gap-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800"
-              >
-                <ShoppingBag className="h-4 w-4" />
-                Purchase {purchase.poNumber || purchase.purchaseCode}
-              </Button>
-            ))}
+          {splitView.enabled && projectSectionMenu}
+          <ProjectPendingsPad projectId={project.id} projectMaterials={project.materials} slim />
+          <span className="hidden truncate text-[11px] text-muted-foreground sm:block">{project.client.name}</span>
+          <span className="hidden text-[11px] font-semibold tabular-nums text-teal-700 md:inline">
+            Materiales {progress}%
+          </span>
+          {splitView.enabled && (
             <Button
-              size="sm"
-              onClick={() => setAddMaterialSignal((value) => value + 1)}
-              className="gap-2 bg-amber-600 text-white hover:bg-amber-700"
+              variant="ghost"
+              size="icon"
+              onClick={() => splitView.setListCollapsed(!splitView.listCollapsed)}
+              className="h-6 w-6 shrink-0"
+              title={splitView.listCollapsed ? 'Mostrar materiales' : 'Colapsar materiales'}
             >
-              <Plus className="h-4 w-4" />
-              {t('projects.actions.addMaterial')}
+              <Layers className="h-3.5 w-3.5" />
             </Button>
-            <Button variant="outline" size="sm" onClick={openPlanViewer} className="gap-2">
-              <Eye className="h-4 w-4" />
-              {t('projects.actions.showPlan')}
+          )}
+          {splitView.enabled && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => splitView.setEnabled(false)}
+              className="h-6 w-6 shrink-0"
+              title="Cerrar Plano + Lista"
+            >
+              <Columns2 className="h-3.5 w-3.5" />
             </Button>
-            {canCancel && (
-              <Button variant="destructive" size="sm" onClick={() => setCancelOpen(true)} className="gap-2">
-                <X className="h-4 w-4" />
-                {t('projects.actions.cancelProject')}
-              </Button>
-            )}
+          )}
+          {splitView.enabled && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={toggleFocusMode}
+              className="h-6 w-6 shrink-0"
+              title={focusMode ? 'Salir de modo enfocado' : 'Enfocar plano'}
+            >
+              {focusMode ? <Minimize2 className="h-3.5 w-3.5" /> : <Maximize2 className="h-3.5 w-3.5" />}
+            </Button>
+          )}
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => splitView.setHeaderCollapsed(false)}
+            className="h-6 w-6 shrink-0"
+            title="Mostrar header del proyecto"
+          >
+            <ChevronDown className="h-3.5 w-3.5" />
+          </Button>
         </div>
-      </div>
-      </div>
-
-      {/* Summary Cards */}
-      <div className="grid gap-4 lg:grid-cols-2">
-        {/* Progress Card */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-              <Layers className="h-4 w-4" />
-              {t('projects.detail.progressTitle')}
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="space-y-2">
-              <div className="flex items-center justify-between text-sm">
-                <span className="text-muted-foreground">{t('projects.detail.dispatched')}</span>
-                <span className="text-lg font-semibold tabular-nums">{progress}%</span>
+      ) : splitView.enabled ? (
+        <div className="sticky top-2 z-30 rounded-lg border bg-card/95 px-2 py-1.5 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/90">
+          <div className="flex min-w-0 items-center gap-2">
+            <Button variant="outline" size="icon" onClick={onBack} className="h-8 w-8 shrink-0" title="Volver">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div className="min-w-0 flex-1">
+              <div className="flex min-w-0 items-center gap-2">
+                {project.poNumber && (
+                  <span className="hidden rounded border border-teal-200 bg-teal-50 px-1.5 py-0.5 font-mono text-[10px] font-semibold text-teal-800 sm:inline-flex">
+                    PO {project.poNumber}
+                  </span>
+                )}
+                <h1 className="truncate text-base font-semibold leading-tight">{project.name}</h1>
+                <ProjectStatusPicker
+                  status={project.status}
+                  onChange={(newStatus) => onUpdateProject({ status: newStatus })}
+                  hasStartDate={Boolean(project.startDate)}
+                  hasMaterials={project.materials.length > 0}
+                />
+                {projectSectionMenu}
+                <ProjectPendingsPad projectId={project.id} projectMaterials={project.materials} slim />
               </div>
-              <Progress value={progress} className="h-2 [&>div]:bg-teal-600" />
-              <p className="text-xs text-muted-foreground">
-                {t('projects.detail.dispatchedSummary', {
-                  dispatched: formatLocaleInteger(locale, totalDispatched),
-                  planned: formatLocaleInteger(locale, totalPlanned),
-                })}
-              </p>
+              <div className="flex min-w-0 items-center gap-2 text-[11px] text-muted-foreground">
+                <span className="truncate">{project.client.name}</span>
+                <span className="hidden shrink-0 tabular-nums md:inline">{headerBudgetText}</span>
+              </div>
             </div>
-          </CardContent>
-        </Card>
-
-        {/* Notes Card */}
-        <Card>
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
-                <FileText className="h-4 w-4" />
-                {t('projects.detail.notesTitle')}
-              </CardTitle>
-              {!editNotes && (
+            <div className="hidden shrink-0 justify-center xl:flex">
+              {materialProgressMini}
+            </div>
+            <div className="flex shrink-0 items-center gap-1">
+              <Button
+                variant={splitView.listCollapsed ? 'default' : 'outline'}
+                size="icon"
+                onClick={() => splitView.setListCollapsed(!splitView.listCollapsed)}
+                className={`h-8 w-8 ${splitView.listCollapsed ? 'bg-slate-900 text-white hover:bg-slate-800' : ''}`}
+                title={splitView.listCollapsed ? 'Mostrar materiales' : 'Colapsar materiales'}
+              >
+                <Layers className="h-4 w-4" />
+              </Button>
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={() => splitView.setEnabled(false)}
+                className="h-8 w-8"
+                title="Cerrar Plano + Lista"
+              >
+                <Columns2 className="h-4 w-4" />
+              </Button>
+              <Button
+                variant={focusMode ? 'default' : 'outline'}
+                size="icon"
+                onClick={toggleFocusMode}
+                className={`h-8 w-8 ${focusMode ? 'bg-cyan-700 text-white hover:bg-cyan-800' : ''}`}
+                title={focusMode ? 'Salir de modo enfocado' : 'Enfocar plano'}
+              >
+                {focusMode ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </Button>
+              {activePurchases.slice(0, 1).map((purchase) => (
                 <Button
-                  variant="ghost"
-                  size="sm"
-                  className="h-7 w-7 p-0"
-                  onClick={() => { setNotesInput(project.notes || ''); setEditNotes(true) }}
+                  key={purchase.id}
+                  variant="outline"
+                  size="icon"
+                  onClick={() => openPurchase(purchase.id)}
+                  className="h-8 w-8 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800"
+                  title={`Purchase ${purchase.poNumber || purchase.purchaseCode}`}
                 >
-                  <Edit3 className="h-3.5 w-3.5" />
+                  <ShoppingBag className="h-4 w-4" />
+                </Button>
+              ))}
+              <Button
+                size="icon"
+                onClick={() => setAddMaterialSignal((value) => value + 1)}
+                className="h-8 w-8 bg-amber-600 text-white hover:bg-amber-700"
+                title={t('projects.actions.addMaterial')}
+              >
+                <Plus className="h-4 w-4" />
+              </Button>
+              <Button variant="outline" size="icon" onClick={openPlanViewer} className="h-8 w-8" title={t('projects.actions.showPlan')}>
+                <Eye className="h-4 w-4" />
+              </Button>
+              {canCancel && (
+                <Button variant="ghost" size="icon" onClick={() => setCancelOpen(true)} className="h-8 w-8 text-rose-600 hover:bg-rose-50 hover:text-rose-700" title={t('projects.actions.cancelProject')}>
+                  <X className="h-4 w-4" />
                 </Button>
               )}
-            </div>
-          </CardHeader>
-          <CardContent>
-            {editNotes ? (
-              <div className="space-y-2">
-                <Textarea
-                  value={notesInput}
-                  onChange={(e) => setNotesInput(e.target.value)}
-                  placeholder={t('projects.fields.notesPlaceholder')}
-                  className="min-h-[80px] resize-none text-sm"
-                  autoFocus
-                />
-                <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    onClick={() => { onUpdateProject({ notes: notesInput }); setEditNotes(false) }}
-                    className="bg-emerald-600 hover:bg-emerald-700 text-white h-8 gap-1.5"
-                  >
-                    <Check className="h-3.5 w-3.5" /> {t('common.saveChanges')}
-                  </Button>
-                  <Button size="sm" variant="ghost" onClick={() => setEditNotes(false)} className="h-8">
-                    {t('common.cancel')}
-                  </Button>
-                </div>
-              </div>
-            ) : (
-              <div
-                onClick={() => { setNotesInput(project.notes || ''); setEditNotes(true) }}
-                className="min-h-[80px] rounded-md border border-dashed px-3 py-2 text-sm cursor-pointer hover:bg-muted/50 transition-colors"
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => splitView.setHeaderCollapsed(true)}
+                className="h-8 w-8"
+                title="Colapsar header"
               >
-                {project.notes ? (
-                  <p className="whitespace-pre-wrap text-foreground leading-relaxed">{project.notes}</p>
-                ) : (
-                  <p className="text-muted-foreground italic">{t('projects.detail.notesEmpty')}</p>
+                <ChevronUp className="h-4 w-4" />
+              </Button>
+            </div>
+          </div>
+        </div>
+      ) : (
+        <div className="sticky top-2 z-30 rounded-lg border bg-card/95 p-3 shadow-sm backdrop-blur supports-[backdrop-filter]:bg-card/90">
+          <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] xl:items-center">
+          <div className="flex min-w-0 items-center gap-2">
+            <Button variant="outline" size="icon" onClick={onBack} className="h-8 w-8 shrink-0">
+              <ArrowLeft className="h-4 w-4" />
+            </Button>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {project.poNumber && (
+                  <span className="rounded-md border border-teal-200 bg-teal-50 px-1.5 py-0.5 font-mono text-[11px] font-semibold text-teal-800">
+                    PO {project.poNumber}
+                  </span>
+                )}
+                {project.projectType && (
+                  <span className="rounded-md border border-sky-200 bg-sky-50 px-1.5 py-0.5 text-[11px] font-semibold text-sky-800">
+                    {project.projectType}
+                  </span>
+                )}
+                <ProjectStatusPicker
+                  status={project.status}
+                  onChange={(newStatus) => onUpdateProject({ status: newStatus })}
+                  hasStartDate={Boolean(project.startDate)}
+                  hasMaterials={project.materials.length > 0}
+                />
+                {project.color && (
+                  <span className={`inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-semibold ${
+                    project.color === 'Blanco'
+                      ? 'border-slate-300 bg-slate-50 text-slate-700'
+                      : 'border-amber-400 bg-amber-50 text-amber-800'
+                  }`}>
+                    <span className={`h-2 w-2 rounded-full ${project.color === 'Blanco' ? 'bg-slate-300 border border-slate-400' : 'bg-amber-500'}`} />
+                    {getProjectColorLabel(project.color, t)}
+                  </span>
                 )}
               </div>
+              <h1 className="mt-1 truncate text-xl font-semibold tracking-tight">{project.name}</h1>
+              <p className="text-xs text-muted-foreground">{project.client.name}</p>
+            </div>
+          </div>
+          <div className="flex justify-center">
+            <HeaderBudgetSummary project={project} />
+          </div>
+          <div className="flex items-center gap-2 flex-wrap xl:justify-end">
+              {projectSectionMenu}
+              <ProjectPendingsPad projectId={project.id} projectMaterials={project.materials} />
+              {activePurchases.map((purchase) => (
+                <Button
+                  key={purchase.id}
+                  variant="outline"
+                  size="sm"
+                  onClick={() => openPurchase(purchase.id)}
+                  className="gap-2 border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 hover:text-blue-800"
+                >
+                  <ShoppingBag className="h-4 w-4" />
+                  Purchase {purchase.poNumber || purchase.purchaseCode}
+                </Button>
+              ))}
+              <Button
+                size="sm"
+                onClick={() => setAddMaterialSignal((value) => value + 1)}
+                className="gap-2 bg-amber-600 text-white hover:bg-amber-700"
+              >
+                <Plus className="h-4 w-4" />
+                {t('projects.actions.addMaterial')}
+              </Button>
+              <Button variant="outline" size="sm" onClick={openPlanViewer} className="gap-2">
+                <Eye className="h-4 w-4" />
+                {t('projects.actions.showPlan')}
+              </Button>
+              {canCancel && (
+                <Button variant="destructive" size="sm" onClick={() => setCancelOpen(true)} className="gap-2">
+                  <X className="h-4 w-4" />
+                  {t('projects.actions.cancelProject')}
+                </Button>
+              )}
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => splitView.setHeaderCollapsed(true)}
+                className="h-8 w-8"
+                title="Colapsar header"
+              >
+                <ChevronUp className="h-4 w-4" />
+              </Button>
+          </div>
+        </div>
+        </div>
             )}
-          </CardContent>
-        </Card>
-      </div>
 
       {/* Tabs — Despachos se oculta solo cuando el proyecto está finalizado o cancelado */}
       {(() => {
-        const isPostDispatch = project.status === 'finished' || project.status === 'cancelled'
-        const defaultTab = 'materials'
         return (
-          <Tabs defaultValue={defaultTab} className="space-y-4">
-            <TabsList className="h-auto flex-wrap justify-start rounded-lg border bg-background p-1">
-              <TabsTrigger value="info" className="gap-2"><ClipboardList className="h-4 w-4" />{t('projects.tabs.info')}</TabsTrigger>
-              <TabsTrigger value="materials" className="gap-2"><Package className="h-4 w-4" />{t('projects.tabs.materials')}</TabsTrigger>
-              <TabsTrigger value="phases" className="gap-2"><Layers className="h-4 w-4" />Fases</TabsTrigger>
-              {!isPostDispatch && (
-                <TabsTrigger value="dispatches" className="gap-2"><Truck className="h-4 w-4" />{t('projects.tabs.dispatches')}</TabsTrigger>
-              )}
-              <TabsTrigger value="returns" className="gap-2"><RotateCcw className="h-4 w-4" />{t('projects.tabs.returns')}</TabsTrigger>
-              <TabsTrigger value="documents" className="gap-2"><FileText className="h-4 w-4" />{t('projects.tabs.documents')}</TabsTrigger>
-              <TabsTrigger value="notes" className="gap-2"><StickyNote className="h-4 w-4" />Notas</TabsTrigger>
-              <TabsTrigger value="expenses" className="gap-2"><Receipt className="h-4 w-4" />{t('projects.tabs.expenses')}</TabsTrigger>
-            </TabsList>
-
+          <Tabs value={activeProjectTab} onValueChange={setActiveProjectTab} className={splitView.enabled ? 'space-y-1' : 'space-y-3'}>
             <TabsContent value="info">
               <InfoTab
                 project={project}
@@ -2257,7 +2746,7 @@ function ProjectDetailView({
               />
             </TabsContent>
 
-            <TabsContent value="materials">
+            <TabsContent value="materials" className={splitView.enabled ? 'mt-0' : undefined}>
               <MaterialsTab
                 project={project}
                 products={products}
@@ -2265,6 +2754,9 @@ function ProjectDetailView({
                 queryClient={queryClient}
                 warehouses={warehouses}
                 openAddSignal={addMaterialSignal}
+                splitView={splitView}
+                focusMode={focusMode}
+                onToggleFocusMode={toggleFocusMode}
               />
             </TabsContent>
 
@@ -2634,13 +3126,13 @@ function HeaderBudgetSummary({ project }: { project: Project }) {
   } = getProjectBudgetStats(project)
 
   return (
-    <div className="w-full min-w-0 xl:w-[520px]">
-      <div className="flex flex-wrap items-center justify-center gap-x-5 gap-y-1">
-        <div className="flex items-center gap-1.5 text-sm font-semibold text-muted-foreground">
+    <div className="w-full min-w-0 xl:w-[460px]">
+      <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-0.5">
+        <div className="flex items-center gap-1.5 text-xs font-semibold text-muted-foreground">
           <DollarSign className="h-3.5 w-3.5" />
           {t('projects.budget.title')}
         </div>
-        <span className="text-lg font-semibold tabular-nums">{formatCurrency(locale, plannedBudget)}</span>
+        <span className="text-base font-semibold tabular-nums">{formatCurrency(locale, plannedBudget)}</span>
         <div className="flex items-center gap-2 text-xs">
           <span className="text-muted-foreground">{t('projects.budget.totalExpense')}</span>
           <span className="font-medium tabular-nums">{formatCurrency(locale, totalExpense)}</span>
@@ -2653,15 +3145,15 @@ function HeaderBudgetSummary({ project }: { project: Project }) {
         </div>
       </div>
       {plannedBudget > 0 && (
-        <div className="mt-1.5 flex items-center gap-2">
-          <Progress value={usagePercent} className="h-1.5 flex-1 [&>div]:bg-teal-600" />
+        <div className="mt-1 flex items-center gap-2">
+          <Progress value={usagePercent} className="h-1 flex-1 [&>div]:bg-teal-600" />
           <span className="text-[11px] text-muted-foreground tabular-nums">{usagePercent}%</span>
         </div>
       )}
       {missingPriceCount > 0 && (
         <button
           type="button"
-          className="mt-1 block w-full text-center text-xs font-medium text-amber-700 underline-offset-2 hover:underline"
+          className="mt-0.5 block w-full text-center text-xs font-medium text-amber-700 underline-offset-2 hover:underline"
           onClick={() => setMissingPricesOpen(true)}
         >
           {formatLocaleInteger(locale, missingPriceCount)} planned item(s) have no reference price.
@@ -3325,6 +3817,116 @@ function sortMaterialsForDisplay(materials: ProjectMaterial[]): ProjectMaterial[
   })
 }
 
+function normalizeSwitchText(value: unknown): string {
+  return String(value ?? '').trim().toLowerCase()
+}
+
+function dimensionsMatch(a: number[], b: number[]): boolean {
+  if (a.length !== b.length) return false
+  return a.every((value, index) => Math.abs(value - b[index]) < 0.0001)
+}
+
+function getProfileDimensions(dimensions: number[]): number[] {
+  return dimensions.length > 1 ? dimensions.slice(0, -1) : []
+}
+
+function getFinalDimension(dimensions: number[]): number | null {
+  return dimensions.length > 0 ? dimensions[dimensions.length - 1] : null
+}
+
+function getSwitchProductRank(currentProduct: Product, currentSection: string, candidate: Product): number {
+  const currentBase = getProductFamily(currentProduct.name)
+  const candidateBase = getProductFamily(candidate.name)
+  const sameBase = Boolean(currentBase && candidateBase && currentBase === candidateBase)
+  const currentDimensions = extractDimensions(currentProduct.name)
+  const candidateDimensions = extractDimensions(candidate.name)
+  const currentProfile = getProfileDimensions(currentDimensions)
+  const candidateProfile = getProfileDimensions(candidateDimensions)
+  const currentLength = getFinalDimension(currentDimensions)
+  const candidateLength = getFinalDimension(candidateDimensions)
+  const sameProfileWithDifferentLength =
+    currentProfile.length > 0 &&
+    dimensionsMatch(currentProfile, candidateProfile) &&
+    currentLength !== null &&
+    candidateLength !== null &&
+    Math.abs(currentLength - candidateLength) > 0.0001
+
+  if (sameProfileWithDifferentLength && (sameBase || !currentBase || !candidateBase)) {
+    return 0
+  }
+
+  if (sameBase) {
+    return 1
+  }
+
+  const currentCatalogFamily = normalizeSwitchText(currentProduct.family)
+  const candidateCatalogFamily = normalizeSwitchText(candidate.family)
+  const currentEngineeringSection = normalizeSwitchText(currentSection || currentProduct.engineeringSection)
+  const candidateEngineeringSection = normalizeSwitchText(candidate.engineeringSection)
+
+  if (
+    currentCatalogFamily &&
+    currentCatalogFamily === candidateCatalogFamily &&
+    currentEngineeringSection &&
+    currentEngineeringSection === candidateEngineeringSection
+  ) {
+    return 2
+  }
+
+  return 3
+}
+
+function compareSwitchBySection(section: string, aName: string, bName: string): number {
+  if (section === 'Structural Frame') return compareStructuralFrameMaterials(aName, bName)
+  if (section === 'Fasteners & Hardware') return compareFastenerMaterials(aName, bName)
+
+  const aFamily = getProductFamily(aName)
+  const bFamily = getProductFamily(bName)
+  if (aFamily !== bFamily) return aFamily.localeCompare(bFamily)
+
+  return compareMaterialsByDimensions(aName, bName)
+}
+
+function compareSameProfileSwitchOptions(currentProduct: Product, a: Product, b: Product): number {
+  const currentLength = getFinalDimension(extractDimensions(currentProduct.name))
+  const aLength = getFinalDimension(extractDimensions(a.name))
+  const bLength = getFinalDimension(extractDimensions(b.name))
+
+  if (currentLength !== null && aLength !== null && bLength !== null) {
+    const distanceDiff = Math.abs(aLength - currentLength) - Math.abs(bLength - currentLength)
+    if (distanceDiff !== 0) return distanceDiff
+
+    const aIsLonger = aLength >= currentLength
+    const bIsLonger = bLength >= currentLength
+    if (aIsLonger !== bIsLonger) return aIsLonger ? -1 : 1
+  }
+
+  return a.name.localeCompare(b.name)
+}
+
+function compareSwitchProductOptions(currentProduct: Product, currentSection: string, a: Product, b: Product): number {
+  const aRank = getSwitchProductRank(currentProduct, currentSection, a)
+  const bRank = getSwitchProductRank(currentProduct, currentSection, b)
+  if (aRank !== bRank) return aRank - bRank
+
+  if (aRank === 0) {
+    const sameProfileDiff = compareSameProfileSwitchOptions(currentProduct, a, b)
+    if (sameProfileDiff !== 0) return sameProfileDiff
+  }
+
+  if (aRank <= 1) {
+    return compareSwitchBySection(currentSection || currentProduct.engineeringSection || '', a.name, b.name)
+  }
+
+  const sectionDiff = getSectionOrder(a.engineeringSection || '') - getSectionOrder(b.engineeringSection || '')
+  if (sectionDiff !== 0) return sectionDiff
+
+  const catalogFamilyDiff = normalizeSwitchText(a.family).localeCompare(normalizeSwitchText(b.family))
+  if (catalogFamilyDiff !== 0) return catalogFamilyDiff
+
+  return compareSwitchBySection(a.engineeringSection || '', a.name, b.name)
+}
+
 function MaterialsTab({
   project,
   products,
@@ -3332,6 +3934,9 @@ function MaterialsTab({
   queryClient,
   warehouses,
   openAddSignal,
+  splitView,
+  focusMode,
+  onToggleFocusMode,
 }: {
   project: Project
   products: Product[]
@@ -3339,12 +3944,46 @@ function MaterialsTab({
   queryClient: ReturnType<typeof useQueryClient>
   warehouses: WarehouseData[]
   openAddSignal?: number
+  splitView: ReturnType<typeof useSplitViewSettings>
+  focusMode: boolean
+  onToggleFocusMode: () => void
 }) {
   const { locale, t } = useI18n()
   const [addDialogOpen, setAddDialogOpen] = useState(false)
   const [engineeringDialogOpen, setEngineeringDialogOpen] = useState(false)
   const [engineeringDialogMode, setEngineeringDialogMode] = useState<'apply' | 'template'>('apply')
   const [requestDialogOpen, setRequestDialogOpen] = useState(false)
+
+  // Workspace "Plano + Lista" (split view) — persiste por proyecto en localStorage
+  const workspaceRef = useRef<HTMLDivElement>(null)
+  const [workspaceHeight, setWorkspaceHeight] = useState<number | null>(null)
+
+  useEffect(() => {
+    if (!splitView.enabled) {
+      setWorkspaceHeight(null)
+      return
+    }
+
+    let frame = 0
+    const measure = () => {
+      window.cancelAnimationFrame(frame)
+      frame = window.requestAnimationFrame(() => {
+        const rect = workspaceRef.current?.getBoundingClientRect()
+        if (!rect) return
+        setWorkspaceHeight(Math.max(360, Math.floor(window.innerHeight - rect.top - 12)))
+      })
+    }
+
+    measure()
+    const timer = window.setTimeout(measure, 80)
+    window.addEventListener('resize', measure)
+
+    return () => {
+      window.clearTimeout(timer)
+      window.cancelAnimationFrame(frame)
+      window.removeEventListener('resize', measure)
+    }
+  }, [splitView.enabled, splitView.headerCollapsed, splitView.listCollapsed])
 
   // BOM auto-generation state
   const [bomDialogOpen, setBomDialogOpen] = useState(false)
@@ -3360,6 +3999,8 @@ function MaterialsTab({
   const [deleteAllMaterialsOpen, setDeleteAllMaterialsOpen] = useState(false)
   const [editingMaterialId, setEditingMaterialId] = useState<string | null>(null)
   const [editingQty, setEditingQty] = useState('')
+  const [editingNoteMaterialId, setEditingNoteMaterialId] = useState<string | null>(null)
+  const [editingNote, setEditingNote] = useState('')
   const [switchingMaterial, setSwitchingMaterial] = useState<ProjectMaterial | null>(null)
   const [matSearch, setMatSearch] = useState('')
   const [materialActionFilter, setMaterialActionFilter] = useState<'all' | 'dispatch' | 'order'>('all')
@@ -3473,6 +4114,37 @@ function MaterialsTab({
     onError: (err: Error) => toast.error(err.message || t('projects.toast.updateError')),
   })
 
+  const editMaterialNotesMutation = useMutation({
+    mutationFn: async ({ materialId, notes }: { materialId: string; notes: string }) => {
+      const res = await fetch(`/api/projects/${project.id}/materials/${materialId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ notes }),
+      })
+      const data = await res.json()
+      if (!res.ok) throw new Error(data?.error || t('projects.toast.updateError'))
+      return data
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      setEditingNoteMaterialId(null)
+      setEditingNote('')
+    },
+    onError: (err: Error) => toast.error(err.message || t('projects.toast.updateError')),
+  })
+
+  const saveNoteEdit = (materialId: string) => {
+    const current = project.materials.find((m) => m.id === materialId)
+    const trimmed = editingNote.trim()
+    if (current && (current.notes ?? '') === trimmed) {
+      setEditingNoteMaterialId(null)
+      setEditingNote('')
+      return
+    }
+    editMaterialNotesMutation.mutate({ materialId, notes: trimmed })
+  }
+
   const switchMaterialMutation = useMutation({
     mutationFn: async ({ materialId, productId }: { materialId: string; productId: string }) => {
       const res = await fetch(`/api/projects/${project.id}/materials/${materialId}`, {
@@ -3512,21 +4184,38 @@ function MaterialsTab({
     setSwitchingMaterial(material)
   }
 
-  // Pending recepción items for purchases belonging to this project
+  // Pending recepción items split by ownership:
+  //   - own: items from this project's purchases/returns (or unassigned)
+  //   - crossProject: items from OTHER projects (suggested when own doesn't cover)
   const { data: pendingRecepcionData } = useQuery({
     queryKey: ['project-recepcion', project.id],
     queryFn: async () => {
       const res = await fetch(`/api/projects/${project.id}/dispatch-recepcion`)
-      if (!res.ok) return []
-      return res.json() as Promise<RecepcionListItem[]>
+      if (!res.ok) return EMPTY_PROJECT_RECEPCION
+      return res.json() as Promise<ProjectRecepcionResponse>
     },
+    // staleTime: 0 + refetchOnMount: 'always' ensures the response is always
+    // fresh — important so cross-cut candidates appear without manual refresh
+    // when the schema/response shape changes.
+    staleTime: 0,
+    refetchOnMount: 'always',
   })
-  const pendingRecepcion = pendingRecepcionData ?? EMPTY_RECEPCION_ITEMS
+  const pendingRecepcion = pendingRecepcionData?.own ?? EMPTY_RECEPCION_ITEMS
+  const crossProjectRecepcion = pendingRecepcionData?.crossProject ?? EMPTY_RECEPCION_ITEMS
+  const recepcionCutCandidates = pendingRecepcionData?.crossCut ?? EMPTY_RECEPCION_CUT_CANDIDATES
+
+  // Cross-project items the user has explicitly opted to consume (checkbox state
+  // inside the dispatch dialog). Reset when dialog closes.
+  const [selectedCrossProjectIds, setSelectedCrossProjectIds] = useState<Set<string>>(new Set())
 
   const dispatchRecepcionMutation = useMutation({
     mutationFn: async () => {
       const res = await fetch(`/api/projects/${project.id}/dispatch-recepcion`, {
         method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          crossProjectItemIds: [...selectedCrossProjectIds],
+        }),
       })
       if (!res.ok) {
         const data = await res.json()
@@ -3543,6 +4232,7 @@ function MaterialsTab({
         count: formatLocaleInteger(locale, data.count),
       }))
       setDispatchRecepcionOpen(false)
+      setSelectedCrossProjectIds(new Set())
     },
     onError: (err: Error) => toast.error(err.message),
   })
@@ -3599,10 +4289,8 @@ function MaterialsTab({
     for (const mat of sortMaterialsForDisplay(project.materials)) {
       const product = products.find((p) => p.id === mat.productId)
       if (!product) continue
-      const inStock = product._availableShelfStock ?? product._totalShelfStock ?? product.currentStock ?? 0
-      const purchased = purchasedByProduct.get(mat.productId) || 0
-      // Only order what's still uncovered: plan - already dispatched - already ordered.
-      const needed = Math.max(mat.plannedQuantity - mat.dispatchedQuantity - purchased - inStock, 0)
+      const coverage = getMaterialCoverage(mat)
+      const needed = coverage.uncovered
       if (needed > 0) {
         missing.push({ productId: mat.productId, productName: mat.product.name, productCode: mat.product.code, needed })
       }
@@ -3726,20 +4414,64 @@ function MaterialsTab({
     return map
   }, [project.purchases])
 
+  // Recepción items pending placement that match this project's planned products
+  // exactly (same productId). These should count toward "in stock" for the
+  // dispatch/order decision — a material sitting in recepción IS available, just
+  // not on a shelf yet.
+  const recepcionByProduct = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const item of pendingRecepcion) {
+      map.set(item.product.id, (map.get(item.product.id) || 0) + Number(item.quantity))
+    }
+    return map
+  }, [pendingRecepcion])
+
   const getMaterialCoverage = (mat: ProjectMaterial) => {
     const product = products.find((p) => p.id === mat.productId)
-    const inStock = product?._availableShelfStock ?? product?._totalShelfStock ?? product?.currentStock ?? 0
+    const shelfStock = product?._availableShelfStock ?? product?._totalShelfStock ?? product?.currentStock ?? 0
+    const recepcionStock = recepcionByProduct.get(mat.productId) ?? 0
+    const inStock = shelfStock + recepcionStock
     const reservedStock = product?._reservedShelfStock ?? 0
     const purchased = purchasedByProduct.get(mat.productId) || 0
     const remaining = Math.max(mat.plannedQuantity - mat.dispatchedQuantity, 0)
-    const uncovered = Math.max(remaining - purchased - inStock, 0)
+    const cutSources = findCuttableSourcesForTarget(
+      {
+        id: mat.productId,
+        code: mat.product.code,
+        name: mat.product.name,
+        color: mat.product.color,
+        unitQuantity: mat.product.unitQuantity,
+      },
+      products,
+    )
+    const cuttableStock = cutSources.reduce((sum, source) => sum + source.coveredTargetPieces, 0)
+    // Also count cuttable stock available in RECEPCIÓN — items of a longer
+    // source product that haven't been moved to a shelf yet. Without this,
+    // the "Despachar" button doesn't appear when the only available material
+    // is a longer piece sitting in recepción.
+    const recepcionCuttableStock = recepcionCutCandidates
+      .filter((c) => c.targetProduct.id === mat.productId)
+      .reduce((sum, c) => {
+        if (c.targetSize <= 0) return sum
+        const piecesPerSource = Math.floor(c.originalSize / c.targetSize)
+        return sum + Math.max(0, c.pieces) * Math.max(0, piecesPerSource)
+      }, 0)
+    const totalCuttable = cuttableStock + recepcionCuttableStock
+    const uncovered = Math.max(remaining - purchased - inStock - totalCuttable, 0)
+    const bestCutSource = cutSources[0] || null
 
     return {
       product,
       inStock,
+      shelfStock,
+      recepcionStock,
       reservedStock,
       purchased,
       remaining,
+      cutSources,
+      cuttableStock: totalCuttable,
+      recepcionCuttableStock,
+      bestCutSource,
       uncovered,
     }
   }
@@ -3762,6 +4494,30 @@ function MaterialsTab({
   const [quickSupplierId, setQuickSupplierId] = useState('')
   const [quickPickEdits, setQuickPickEdits] = useState<Record<string, number>>({})
   const [quickUseReserve, setQuickUseReserve] = useState(false)
+  // Cross-product cut: when the planned product (B = 6') has no stock but a longer
+  // source product (A = 24') is available, the user can opt to cut from A. The
+  // remainder (e.g. 18') is stored as a new short-piece product, reserved, or scrap.
+  const [cutFromProductId, setCutFromProductId] = useState<string | null>(null)
+  const [cutFromShelfId, setCutFromShelfId] = useState<string | null>(null)
+  // For recepción cuts: holds the recepcionItem.id of the selected source
+  const [cutFromRecepcionItemId, setCutFromRecepcionItemId] = useState<string | null>(null)
+  const [cutRemainderHandling, setCutRemainderHandling] = useState<'short-piece' | 'reserved' | 'scrap'>('short-piece')
+
+  // Reset cut state when the dialog opens with a new material
+  useEffect(() => {
+    setCutRemainderHandling('short-piece')
+    setCutFromRecepcionItemId(null)
+    if (!quickMat || quickMode !== 'dispatch') {
+      setCutFromProductId(null)
+      setCutFromShelfId(null)
+      return
+    }
+    const coverage = getMaterialCoverage(quickMat)
+    const bestSource = coverage.inStock <= 0 ? coverage.bestCutSource : null
+    setCutFromProductId(bestSource?.productId ?? null)
+    setCutFromShelfId(bestSource?.bestShelfId ?? null)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickMat?.id, quickMode, products])
 
   const quickReceptionSignature = useMemo(
     () => pendingRecepcion
@@ -3845,7 +4601,18 @@ function MaterialsTab({
   }
 
   const quickDispatchMutation = useMutation({
-    mutationFn: async (vars: { picks: { shelfId: string; qty: number; allowReserve?: boolean }[]; productId: string }) => {
+    mutationFn: async (vars: {
+      picks: {
+        shelfId: string
+        qty: number
+        allowReserve?: boolean
+        cutFromProductId?: string
+        cutFromShelfId?: string
+        cutFromRecepcionItemId?: string
+        remainderHandling?: 'short-piece' | 'reserved' | 'scrap'
+      }[]
+      productId: string
+    }) => {
       const res = await fetch(`/api/projects/${project.id}/dispatches`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -3857,6 +4624,10 @@ function MaterialsTab({
             shelfId: p.shelfId,
             quantity: p.qty,
             allowReserve: p.allowReserve ?? false,
+            cutFromProductId: p.cutFromProductId,
+            cutFromShelfId: p.cutFromShelfId,
+            cutFromRecepcionItemId: p.cutFromRecepcionItemId,
+            remainderHandling: p.remainderHandling,
           })),
         }),
       })
@@ -3870,6 +4641,8 @@ function MaterialsTab({
       queryClient.invalidateQueries({ queryKey: ['project'] })
       queryClient.invalidateQueries({ queryKey: ['projects'] })
       queryClient.invalidateQueries({ queryKey: ['products'] })
+      queryClient.invalidateQueries({ queryKey: ['recepcion'] })
+      queryClient.invalidateQueries({ queryKey: ['project-recepcion', project.id] })
       toast.success(t('projects.toast.quickDispatch'))
       setQuickMat(null)
     },
@@ -4003,86 +4776,250 @@ function MaterialsTab({
       !project.materials.some((m) => m.productId === p.id) &&
       isProductCompatibleWithProjectColor(project.color, p.color)
   )
-  const switchProductOptions = products.filter(
-    (p) =>
-      !project.materials.some(
-        (m) => m.productId === p.id && m.id !== switchingMaterial?.id
+  const switchProductOptions = useMemo(() => {
+    if (!switchingMaterial) return []
+
+    const currentProduct = products.find((p) => p.id === switchingMaterial.productId)
+    if (!currentProduct) return []
+
+    const currentSection =
+      switchingMaterial.engineeringSection ||
+      switchingMaterial.product.engineeringSection ||
+      currentProduct.engineeringSection ||
+      ''
+
+    return products
+      .filter((p) => p.id !== switchingMaterial.productId)
+      .filter(
+        (p) =>
+          !project.materials.some(
+            (m) => m.productId === p.id && m.id !== switchingMaterial.id
+          )
       )
-  )
+      .filter((p) => isProductCompatibleWithProjectColor(project.color, p.color))
+      .sort((a, b) => compareSwitchProductOptions(currentProduct, currentSection, a, b))
+  }, [products, project.materials, project.color, switchingMaterial])
 
   const isPostDispatch = project.status === 'finished' || project.status === 'cancelled'
-
-  return (
-    <div className="space-y-4">
-      {/* Actions — flujo lógico: Subir lista → Pedir → Agregar → Despachar desde Recepción */}
-      {/* Cuando el proyecto ya está despachado/finalizado solo mostramos Agregar Material */}
-      <div className="flex flex-wrap gap-2">
+  const compactMaterials = sortMaterialsForDisplay(project.materials).map<CompactMaterial>((mat) => {
+    const coverage = getMaterialCoverage(mat)
+    const gap = coverage.remaining
+    return {
+      id: mat.id,
+      productId: mat.productId,
+      productName: mat.product.name,
+      productCode: mat.product.code,
+      section: mat.engineeringSection || mat.product?.engineeringSection || 'Sin seccion',
+      plannedQuantity: mat.plannedQuantity,
+      dispatchedQuantity: mat.dispatchedQuantity,
+      returnedQuantity: returnedByProduct.get(mat.productId) || 0,
+      canDispatch: gap > 0 && (coverage.inStock > 0 || coverage.cuttableStock > 0) && !isPostDispatch,
+      needsPurchase: coverage.uncovered > 0 && !isPostDispatch,
+      inStock: coverage.inStock,
+      uncovered: coverage.uncovered,
+      gap,
+      cuttableStock: coverage.cuttableStock,
+      cutSourceLabel: coverage.bestCutSource?.code,
+      cutSourceLength: coverage.bestCutSource?.sourceLength,
+    }
+  })
+  const materialsActionMenu = (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button size="sm" variant="outline" className="gap-2 border-slate-200 bg-slate-100 hover:bg-slate-200 text-slate-700">
+          <Settings2 className="h-4 w-4" />
+          Acciones materiales
+          <ChevronDown className="h-4 w-4" />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="start" className="w-64">
+        <DropdownMenuLabel>Materiales</DropdownMenuLabel>
+        <DropdownMenuItem onSelect={() => splitView.setEnabled(true)}>
+          <Columns2 className="mr-2 h-4 w-4" />
+          Modo Plano + Lista
+        </DropdownMenuItem>
         {!isPostDispatch && (
           <>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => { setBomDialogOpen(true); setBomStep(1); setBomResult(null); setBomForm({ widthFt: '', depthFt: '', wallHeightFt: '', roofType: 'hip', bayCount: '', roofPitchFt: '' }) }}
-              className="gap-2 border-teal-300 text-teal-700 hover:bg-teal-50 hover:text-teal-800"
+            <DropdownMenuItem
+              onSelect={() => {
+                setBomDialogOpen(true)
+                setBomStep(1)
+                setBomResult(null)
+                setBomForm({ widthFt: '', depthFt: '', wallHeightFt: '', roofType: 'hip', bayCount: '', roofPitchFt: '' })
+              }}
             >
-              <Wand2 className="h-4 w-4" /> Generar BOM
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
+              <Wand2 className="mr-2 h-4 w-4" />
+              Generar BOM
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => {
                 setEngineeringDialogMode('apply')
                 setEngineeringDialogOpen(true)
               }}
-              className="gap-2"
             >
-              <Copy className="h-4 w-4" /> {t('projects.actions.applyTemplate')}
-            </Button>
-            <Button
-              size="sm"
-              variant="outline"
-              onClick={() => {
+              <Copy className="mr-2 h-4 w-4" />
+              {t('projects.actions.applyTemplate')}
+            </DropdownMenuItem>
+            <DropdownMenuItem
+              onSelect={() => {
                 setEngineeringDialogMode('template')
                 setEngineeringDialogOpen(true)
               }}
-              className="gap-2"
             >
-              <Layers className="h-4 w-4" /> {t('projects.actions.createTemplate')}
-            </Button>
+              <Layers className="mr-2 h-4 w-4" />
+              {t('projects.actions.createTemplate')}
+            </DropdownMenuItem>
             {project.materials.length > 0 && (
-              <Button size="sm" variant="outline" onClick={handleOpenRequestDialog} className="gap-2">
-                <ShoppingBag className="h-4 w-4" /> {t('projects.actions.requestMissingMaterials')}
-              </Button>
+              <>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem onSelect={() => setDeleteAllMaterialsOpen(true)} className="text-rose-700 focus:text-rose-700">
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  {t('projects.actions.deleteMaterialList')}
+                </DropdownMenuItem>
+              </>
             )}
           </>
         )}
-        {project.materials.length > 0 && !isPostDispatch && (
-          <Button
-            size="sm"
-            variant="outline"
-            onClick={() => setDeleteAllMaterialsOpen(true)}
-            className="gap-2 border-rose-200 text-rose-700 hover:bg-rose-50 hover:text-rose-800"
-          >
-            <Trash2 className="h-4 w-4" /> {t('projects.actions.deleteMaterialList')}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+
+  return (
+    <div className={splitView.enabled ? 'space-y-0' : 'space-y-4'}>
+      {/* Actions — flujo lógico: Subir lista → Pedir → Agregar → Despachar desde Recepción */}
+      {/* Cuando el proyecto ya está despachado/finalizado solo mostramos Agregar Material */}
+      {!splitView.enabled && (
+      <div className="flex flex-wrap items-center gap-2">
+        {materialsActionMenu}
+        {!isPostDispatch && project.materials.length > 0 && (
+          <Button size="sm" variant="outline" onClick={handleOpenRequestDialog} className="gap-2 border-blue-200 text-blue-700 hover:bg-blue-50">
+            <ShoppingBag className="h-4 w-4" />
+            {t('projects.actions.requestMissingMaterials')}
           </Button>
         )}
         {pendingRecepcion.length > 0 && (
           <Button
             size="sm"
             onClick={() => setDispatchRecepcionOpen(true)}
-            className="gap-2 bg-emerald-600 hover:bg-emerald-700 text-white"
+            className="gap-2 bg-emerald-600 text-white hover:bg-emerald-700 ring-2 ring-emerald-300 ring-offset-2"
           >
             <Inbox className="h-4 w-4" />
             {t('projects.actions.dispatchFromReception')}
-            <Badge variant="secondary" className="ml-1 bg-white text-emerald-700">
+            <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-emerald-700 animate-pulse">
               {pendingRecepcion.length}
-            </Badge>
+            </span>
           </Button>
         )}
       </div>
+      )}
 
-      {/* Materials Table */}
-      {project.materials.length === 0 ? (
+      {/* Materials Table — opcionalmente envuelto en split view con plano embebido */}
+      <div
+        ref={workspaceRef}
+        className={splitView.enabled ? 'grid min-h-0 overflow-hidden rounded-lg border bg-card' : ''}
+        style={
+          splitView.enabled
+            ? {
+                gridTemplateColumns: splitView.listCollapsed
+                  ? '52px minmax(0, 1fr)'
+                  : `${splitView.ratio * 100}% 6px ${(1 - splitView.ratio) * 100}%`,
+                height: workspaceHeight ? `${workspaceHeight}px` : 'calc(100dvh - 230px)',
+                minHeight: '360px',
+              }
+            : undefined
+        }
+      >
+        <div className={splitView.enabled ? 'min-h-0 min-w-0 overflow-hidden' : ''}>
+      {splitView.enabled ? (
+        splitView.listCollapsed ? (
+          <CollapsedListStrip
+            materials={compactMaterials}
+            onExpand={() => splitView.setListCollapsed(false)}
+          />
+        ) : project.materials.length === 0 ? (
+          <EmptyState
+            icon={Package}
+            title={t('projects.materials.emptyTitle')}
+            description={t('projects.materials.emptyDescription')}
+          />
+        ) : (
+          <MaterialsCompactView
+            materials={sortMaterialsForDisplay(project.materials).map<CompactMaterial>((mat) => {
+              const coverage = getMaterialCoverage(mat)
+              const gap = coverage.remaining
+              return {
+                id: mat.id,
+                productId: mat.productId,
+                productName: mat.product.name,
+                productCode: mat.product.code,
+                section: mat.engineeringSection || mat.product?.engineeringSection || 'Sin sección',
+                plannedQuantity: mat.plannedQuantity,
+                dispatchedQuantity: mat.dispatchedQuantity,
+                returnedQuantity: returnedByProduct.get(mat.productId) || 0,
+                notes: mat.notes ?? '',
+                canDispatch: gap > 0 && (coverage.inStock > 0 || coverage.cuttableStock > 0) && !isPostDispatch,
+                needsPurchase: coverage.uncovered > 0 && !isPostDispatch,
+                inStock: coverage.inStock,
+                uncovered: coverage.uncovered,
+                gap,
+                cuttableStock: coverage.cuttableStock,
+                cutSourceLabel: coverage.bestCutSource?.code,
+                cutSourceLength: coverage.bestCutSource?.sourceLength,
+              }
+            })}
+            scrollStorageKey={`mat-split-list-scroll-${project.id}`}
+            isPostDispatch={isPostDispatch}
+            search={matSearch}
+            onSearchChange={setMatSearch}
+            actionFilter={materialActionFilter}
+            onActionFilterChange={setMaterialActionFilter}
+            editingMaterialId={editingMaterialId}
+            editingQty={editingQty}
+            onEditingQtyChange={setEditingQty}
+            onStartEdit={(mat) => {
+              setEditingMaterialId(mat.id)
+              setEditingQty(String(mat.plannedQuantity))
+            }}
+            onCancelEdit={() => {
+              setEditingMaterialId(null)
+              setEditingQty('')
+            }}
+            onSaveEdit={(matId, dispatched) => saveEdit(matId, dispatched)}
+            isEditPending={editMaterialMutation.isPending}
+            editingNoteMaterialId={editingNoteMaterialId}
+            editingNote={editingNote}
+            onEditingNoteChange={setEditingNote}
+            onStartEditNote={(mat) => {
+              setEditingNoteMaterialId(mat.id)
+              setEditingNote(mat.notes)
+            }}
+            onCancelEditNote={() => {
+              setEditingNoteMaterialId(null)
+              setEditingNote('')
+            }}
+            onSaveEditNote={(matId) => saveNoteEdit(matId)}
+            isEditNotePending={editMaterialNotesMutation.isPending}
+            onDelete={(matId) => setDeleteMaterialId(matId)}
+            onDispatch={(mat) => {
+              const fullMat = project.materials.find((m) => m.id === mat.id)
+              if (!fullMat) return
+              setQuickMat(fullMat)
+              setQuickMode('dispatch')
+            }}
+            onRequest={(mat) => {
+              const fullMat = project.materials.find((m) => m.id === mat.id)
+              if (!fullMat) return
+              setQuickMat(fullMat)
+              setQuickMode('request')
+              setQuickSupplierId('')
+            }}
+            onSwitch={(mat) => {
+              const fullMat = project.materials.find((m) => m.id === mat.id)
+              if (fullMat) openSwitchMaterial(fullMat)
+            }}
+          />
+        )
+      ) : project.materials.length === 0 ? (
         <EmptyState
           icon={Package}
           title={t('projects.materials.emptyTitle')}
@@ -4096,13 +5033,15 @@ function MaterialsTab({
           const returned = returnedByProduct.get(mat.productId) || 0
           const coverage = getMaterialCoverage(mat)
           const gap = coverage.remaining
-          const canDispatch = gap > 0 && coverage.inStock > 0 && !isPostDispatch
+          const canDispatch = gap > 0 && (coverage.inStock > 0 || coverage.cuttableStock > 0) && !isPostDispatch
           const needsPurchase = coverage.uncovered > 0 && !isPostDispatch
 
           return {
             mat,
             returned,
             inStock: coverage.inStock,
+            cuttableStock: coverage.cuttableStock,
+            bestCutSource: coverage.bestCutSource,
             gap,
             uncovered: coverage.uncovered,
             canDispatch,
@@ -4135,21 +5074,36 @@ function MaterialsTab({
           const pendingLabel    = locale === 'es' ? 'Pendiente' : 'Pending'
           const printDate       = new Date().toLocaleDateString(locale === 'es' ? 'es-MX' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })
 
-          const rows = project.materials.map((mat, i) => {
-            const returned = returnedByProduct.get(mat.productId) || 0
-            const pending  = Math.max(0, mat.plannedQuantity - mat.dispatchedQuantity)
-            return `<tr>
-              <td class="num">${i + 1}</td>
-              <td>
-                <strong>${mat.product.name}</strong>
-                <div class="code">${mat.product.code}</div>
-                ${(mat.engineeringSection || mat.product?.engineeringSection) ? `<span class="section">${mat.engineeringSection || mat.product?.engineeringSection}</span>` : ''}
-              </td>
-              <td class="num">${mat.plannedQuantity}</td>
-              <td class="num">${mat.dispatchedQuantity}</td>
-              <td class="num">${returned}</td>
-              <td class="num">${pending}</td>
-            </tr>`
+          // Agrupar materiales por sección, conservando el orden del compact view
+          const sectionGroups: { section: string; items: typeof materialRows }[] = []
+          for (const row of materialRows) {
+            const section = row.mat.engineeringSection || row.mat.product?.engineeringSection || 'Sin sección'
+            const last = sectionGroups[sectionGroups.length - 1]
+            if (last && last.section === section) {
+              last.items.push(row)
+            } else {
+              sectionGroups.push({ section, items: [row] })
+            }
+          }
+
+          let runningIndex = 0
+          const body = sectionGroups.map((group) => {
+            const sectionRow = `<tr class="sec"><td colspan="6">${group.section} <span class="sec-count">· ${group.items.length}</span></td></tr>`
+            const itemRows = group.items.map((row) => {
+              runningIndex++
+              const mat = row.mat
+              const returned = row.returned
+              const pending = Math.max(0, mat.plannedQuantity - mat.dispatchedQuantity)
+              return `<tr>
+                <td class="num">${runningIndex}</td>
+                <td><strong>${mat.product.name}</strong> <span class="code">${mat.product.code}</span></td>
+                <td class="num">${mat.plannedQuantity}</td>
+                <td class="num">${mat.dispatchedQuantity}</td>
+                <td class="num">${returned > 0 ? returned : '<span class="zero">0</span>'}</td>
+                <td class="num">${pending}</td>
+              </tr>`
+            }).join('')
+            return sectionRow + itemRows
           }).join('')
 
           const html = `<!DOCTYPE html>
@@ -4158,27 +5112,30 @@ function MaterialsTab({
 <title>${project.name}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,Helvetica,sans-serif;font-size:9px;line-height:1.16;color:#111;padding:12px}
-  .hdr{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:10px;margin-bottom:7px;padding-bottom:5px;border-bottom:1px solid #d4d4d8}
-  h1{font-size:13px;line-height:1.12;font-weight:700;margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .client{font-size:9px;color:#52525b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .meta{font-size:8px;color:#71717a;text-align:right;white-space:nowrap}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:11.3px;line-height:1.22;color:#111;padding:12px}
+  .hdr{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:10px;margin-bottom:9px;padding-bottom:7px;border-bottom:1px solid #d4d4d8}
+  h1{font-size:16px;line-height:1.12;font-weight:700;margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .client{font-size:11.3px;color:#52525b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .meta{font-size:10px;color:#71717a;text-align:right;white-space:nowrap}
   table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:0}
   thead{display:table-header-group}
   tfoot{display:table-row-group}
   tr{break-inside:avoid;page-break-inside:avoid}
-  thead th{background:#f4f4f5;padding:3px 4px;font-size:7.5px;line-height:1.05;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#52525b;border-bottom:1px solid #d4d4d8}
-  tbody td{padding:2px 4px;border-bottom:.5px solid #ececef;vertical-align:top}
+  thead th{background:#f4f4f5;padding:4px 5px;font-size:9.4px;line-height:1.05;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#52525b;border-bottom:1px solid #d4d4d8}
+  tbody td{padding:3.5px 5px;border-bottom:.5px solid #ececef;vertical-align:middle}
   tbody tr:last-child td{border-bottom:none}
-  tfoot td{padding:3px 4px;font-weight:700;border-top:1px solid #d4d4d8;background:#fafafa}
+  tbody tr:nth-child(even):not(.sec) td{background:#fafbfc}
+  tfoot td{padding:4px 5px;font-weight:700;border-top:1px solid #d4d4d8;background:#fafafa}
   .num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
-  td strong{font-size:9px;line-height:1.1;font-weight:650}
-  .code{font-family:ui-monospace,monospace;font-size:7.5px;color:#71717a;margin-top:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .section{display:inline-block;margin-top:1px;font-size:7px;background:#f4f4f5;border-radius:2px;padding:0 3px;color:#52525b;max-width:100%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .col-index{width:22px}
+  td strong{font-size:11.3px;line-height:1.1;font-weight:650}
+  .code{font-family:ui-monospace,monospace;font-size:8.7px;color:#94a3b8;margin-left:5px;letter-spacing:.01em}
+  .zero{color:#cbd5e1}
+  tr.sec td{background:#e2e8f0;padding:4px 5px;font-size:9.4px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#334155;border-top:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1}
+  tr.sec .sec-count{font-weight:600;color:#64748b}
+  .col-index{width:26px}
   .col-product{width:auto;text-align:left}
-  .col-qty{width:54px}
-  @media print{@page{margin:6mm 7mm;size:A4}body{padding:0}thead th,tfoot td,.section{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+  .col-qty{width:72px}
+  @media print{@page{margin:6mm 7mm;size:A4}body{padding:0}thead th,tfoot td,tr.sec td,tbody tr:nth-child(even) td{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head>
 <body>
   <div class="hdr">
@@ -4197,10 +5154,118 @@ function MaterialsTab({
       <th class="num col-qty">${t('projects.materials.table.returned')}</th>
       <th class="num col-qty">${pendingLabel}</th>
     </tr></thead>
-    <tbody>${rows}</tbody>
+    <tbody>${body}</tbody>
     <tfoot><tr>
       <td></td>
       <td>Total · ${project.materials.length} ${locale === 'es' ? 'materiales' : 'materials'}</td>
+      <td class="num">${totalPlanned}</td>
+      <td class="num">${totalDispatched}</td>
+      <td class="num">${totalReturned}</td>
+      <td class="num">${totalPending}</td>
+    </tr></tfoot>
+  </table>
+  <script>window.onload=function(){window.print()}</script>
+</body></html>`
+
+          const win = window.open('', '_blank', 'width=900,height=700')
+          if (win) { win.document.write(html); win.document.close() }
+        }
+
+        const handlePrintFilteredMaterials = () => {
+          const totalPlanned    = visibleRows.reduce((s, r) => s + r.mat.plannedQuantity, 0)
+          const totalDispatched = visibleRows.reduce((s, r) => s + r.mat.dispatchedQuantity, 0)
+          const totalReturned   = visibleRows.reduce((s, r) => s + r.returned, 0)
+          const totalPending    = Math.max(0, totalPlanned - totalDispatched)
+          const pendingLabel    = locale === 'es' ? 'Pendiente' : 'Pending'
+          const printDate       = new Date().toLocaleDateString(locale === 'es' ? 'es-MX' : 'en-US', { year: 'numeric', month: 'long', day: 'numeric' })
+          const filteredLabel   = `Filtrado: ${visibleRows.length} / ${project.materials.length}`
+
+          // Agrupar materiales filtrados por sección, conservando el orden
+          const sectionGroups: { section: string; items: typeof visibleRows }[] = []
+          for (const row of visibleRows) {
+            const section = row.mat.engineeringSection || row.mat.product?.engineeringSection || 'Sin sección'
+            const last = sectionGroups[sectionGroups.length - 1]
+            if (last && last.section === section) {
+              last.items.push(row)
+            } else {
+              sectionGroups.push({ section, items: [row] })
+            }
+          }
+
+          let runningIndex = 0
+          const body = sectionGroups.map((group) => {
+            const sectionRow = `<tr class="sec"><td colspan="6">${group.section} <span class="sec-count">· ${group.items.length}</span></td></tr>`
+            const itemRows = group.items.map((row) => {
+              runningIndex++
+              const mat = row.mat
+              const returned = row.returned
+              const pending = Math.max(0, mat.plannedQuantity - mat.dispatchedQuantity)
+              return `<tr>
+                <td class="num">${runningIndex}</td>
+                <td><strong>${mat.product.name}</strong> <span class="code">${mat.product.code}</span></td>
+                <td class="num">${mat.plannedQuantity}</td>
+                <td class="num">${mat.dispatchedQuantity}</td>
+                <td class="num">${returned > 0 ? returned : '<span class="zero">0</span>'}</td>
+                <td class="num">${pending}</td>
+              </tr>`
+            }).join('')
+            return sectionRow + itemRows
+          }).join('')
+
+          const html = `<!DOCTYPE html>
+<html lang="${locale}"><head>
+<meta charset="UTF-8">
+<title>${project.name} — ${filteredLabel}</title>
+<style>
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:11.3px;line-height:1.22;color:#111;padding:12px}
+  .hdr{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:10px;margin-bottom:9px;padding-bottom:7px;border-bottom:1px solid #d4d4d8}
+  h1{font-size:16px;line-height:1.12;font-weight:700;margin-bottom:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .client{font-size:11.3px;color:#52525b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .meta{font-size:10px;color:#71717a;text-align:right;white-space:nowrap}
+  .filter-tag{font-size:9px;background:#dbeafe;color:#1d4ed8;padding:2px 6px;border-radius:3px;margin-top:3px;display:inline-block}
+  table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:0}
+  thead{display:table-header-group}
+  tfoot{display:table-row-group}
+  tr{break-inside:avoid;page-break-inside:avoid}
+  thead th{background:#f4f4f5;padding:4px 5px;font-size:9.4px;line-height:1.05;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#52525b;border-bottom:1px solid #d4d4d8}
+  tbody td{padding:3.5px 5px;border-bottom:.5px solid #ececef;vertical-align:middle}
+  tbody tr:last-child td{border-bottom:none}
+  tbody tr:nth-child(even):not(.sec) td{background:#fafbfc}
+  tfoot td{padding:4px 5px;font-weight:700;border-top:1px solid #d4d4d8;background:#fafafa}
+  .num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
+  td strong{font-size:11.3px;line-height:1.1;font-weight:650}
+  .code{font-family:ui-monospace,monospace;font-size:8.7px;color:#94a3b8;margin-left:5px;letter-spacing:.01em}
+  .zero{color:#cbd5e1}
+  tr.sec td{background:#e2e8f0;padding:4px 5px;font-size:9.4px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#334155;border-top:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1}
+  tr.sec .sec-count{font-weight:600;color:#64748b}
+  .col-index{width:26px}
+  .col-product{width:auto;text-align:left}
+  .col-qty{width:72px}
+  @media print{@page{margin:6mm 7mm;size:A4}body{padding:0}thead th,tfoot td,tr.sec td,tbody tr:nth-child(even) td{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+</style></head>
+<body>
+  <div class="hdr">
+    <div>
+      <h1>${project.name}</h1>
+      <div class="client">${project.client.name}${project.poNumber ? ` · PO ${project.poNumber}` : ''}</div>
+      <div class="filter-tag">${filteredLabel}</div>
+    </div>
+    <div class="meta">${printDate}<br>${visibleRows.length} ${locale === 'es' ? 'materiales' : 'materials'}</div>
+  </div>
+  <table>
+    <thead><tr>
+      <th class="num col-index">#</th>
+      <th class="col-product">${t('reports.tables.product')}</th>
+      <th class="num col-qty">${t('projects.materials.table.planned')}</th>
+      <th class="num col-qty">${t('projects.materials.table.dispatched')}</th>
+      <th class="num col-qty">${t('projects.materials.table.returned')}</th>
+      <th class="num col-qty">${pendingLabel}</th>
+    </tr></thead>
+    <tbody>${body}</tbody>
+    <tfoot><tr>
+      <td></td>
+      <td>Total · ${visibleRows.length} ${locale === 'es' ? 'materiales' : 'materials'}</td>
       <td class="num">${totalPlanned}</td>
       <td class="num">${totalDispatched}</td>
       <td class="num">${totalReturned}</td>
@@ -4254,7 +5319,7 @@ function MaterialsTab({
               Returned: row.returned,
               Pending: pending,
               'Stock Available': row.inStock,
-              'To Dispatch': row.canDispatch ? Math.min(row.gap, row.inStock) : 0,
+              'To Dispatch': row.canDispatch ? Math.min(row.gap, row.inStock + row.cuttableStock) : 0,
               'To Order': row.needsPurchase ? row.uncovered : 0,
             }
           })
@@ -4319,59 +5384,88 @@ function MaterialsTab({
             month: 'long',
             day: 'numeric',
           })
-          const rows = pendingRows.map((row, index) => {
-            const dispatchQty = row.canDispatch ? Math.min(row.gap, row.inStock) : 0
-            const orderQty = row.needsPurchase ? row.uncovered : 0
-            return `<tr>
-              <td class="num">${index + 1}</td>
-              <td>
-                <strong>${row.mat.product.name}</strong>
-                <div class="code">${row.mat.product.code}</div>
-                ${(row.mat.engineeringSection || row.mat.product?.engineeringSection) ? `<span class="section">${row.mat.engineeringSection || row.mat.product?.engineeringSection}</span>` : ''}
-              </td>
-              <td class="num">${row.mat.plannedQuantity}</td>
-              <td class="num">${row.mat.dispatchedQuantity}</td>
-              <td class="num">${row.inStock}</td>
-              <td class="num">${dispatchQty || '-'}</td>
-              <td class="num">${orderQty || '-'}</td>
-            </tr>`
+          // Agrupar por sección, conservando orden del compact view
+          const sectionGroups: { section: string; items: typeof pendingRows }[] = []
+          for (const row of pendingRows) {
+            const section = row.mat.engineeringSection || row.mat.product?.engineeringSection || 'Sin sección'
+            const last = sectionGroups[sectionGroups.length - 1]
+            if (last && last.section === section) {
+              last.items.push(row)
+            } else {
+              sectionGroups.push({ section, items: [row] })
+            }
+          }
+
+          let runningIndex = 0
+          const body = sectionGroups.map((group) => {
+            const sectionRow = `<tr class="sec"><td colspan="7">${group.section} <span class="sec-count">· ${group.items.length}</span></td></tr>`
+            const itemRows = group.items.map((row) => {
+              runningIndex++
+              const dispatchQty = row.canDispatch ? Math.min(row.gap, row.inStock + row.cuttableStock) : 0
+              const orderQty = row.needsPurchase ? row.uncovered : 0
+              return `<tr>
+                <td class="num">${runningIndex}</td>
+                <td><strong>${row.mat.product.name}</strong> <span class="code">${row.mat.product.code}</span></td>
+                <td class="num">${row.mat.plannedQuantity}</td>
+                <td class="num">${row.mat.dispatchedQuantity}</td>
+                <td class="num">${row.inStock}</td>
+                <td class="num">${dispatchQty ? `<span class="disp">${dispatchQty}</span>` : '<span class="zero">-</span>'}</td>
+                <td class="num">${orderQty ? `<span class="ord">${orderQty}</span>` : '<span class="zero">-</span>'}</td>
+              </tr>`
+            }).join('')
+            return sectionRow + itemRows
           }).join('')
+
           const html = `<!DOCTYPE html>
 <html lang="${locale}"><head>
 <meta charset="UTF-8">
 <title>${project.name} - ${title}</title>
 <style>
   *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:system-ui,-apple-system,sans-serif;font-size:12px;color:#111;padding:24px}
-  .hdr{margin-bottom:18px;padding-bottom:12px;border-bottom:2px solid #e4e4e7}
-  h1{font-size:18px;font-weight:700;margin-bottom:3px}
-  .sub{font-size:13px;font-weight:600;color:#334155;margin-bottom:2px}
-  .meta{font-size:10px;color:#71717a}
-  table{width:100%;border-collapse:collapse}
-  thead th{background:#f4f4f5;padding:7px 9px;font-size:10px;font-weight:700;text-transform:uppercase;color:#52525b;border-bottom:1px solid #d4d4d8}
-  tbody td{padding:6px 9px;border-bottom:1px solid #e4e4e7;vertical-align:top}
+  body{font-family:Arial,Helvetica,sans-serif;font-size:11.3px;line-height:1.22;color:#111;padding:12px}
+  .hdr{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:10px;margin-bottom:9px;padding-bottom:7px;border-bottom:1px solid #d4d4d8}
+  h1{font-size:16px;line-height:1.12;font-weight:700;margin-bottom:1px}
+  .sub{font-size:11.3px;font-weight:600;color:#334155;margin-bottom:1px}
+  .client{font-size:11.3px;color:#52525b}
+  .meta{font-size:10px;color:#71717a;text-align:right;white-space:nowrap}
+  table{width:100%;border-collapse:collapse;table-layout:fixed;margin-top:0}
+  thead{display:table-header-group}
+  tr{break-inside:avoid;page-break-inside:avoid}
+  thead th{background:#f4f4f5;padding:4px 5px;font-size:9.4px;line-height:1.05;font-weight:700;text-transform:uppercase;letter-spacing:.03em;color:#52525b;border-bottom:1px solid #d4d4d8}
+  tbody td{padding:3.5px 5px;border-bottom:.5px solid #ececef;vertical-align:middle}
+  tbody tr:nth-child(even):not(.sec) td{background:#fafbfc}
   .num{text-align:right;font-variant-numeric:tabular-nums;font-family:ui-monospace,monospace}
-  .code{font-family:ui-monospace,monospace;font-size:10px;color:#71717a;margin-top:1px}
-  .section{display:inline-block;margin-top:3px;font-size:10px;background:#f4f4f5;border-radius:4px;padding:1px 6px;color:#52525b}
-  @media print{@page{margin:12mm 15mm;size:A4}body{padding:0}thead th{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+  td strong{font-size:11.3px;line-height:1.1;font-weight:650}
+  .code{font-family:ui-monospace,monospace;font-size:8.7px;color:#94a3b8;margin-left:5px;letter-spacing:.01em}
+  .zero{color:#cbd5e1}
+  .disp{color:#047857;font-weight:700}
+  .ord{color:#1d4ed8;font-weight:700}
+  tr.sec td{background:#e2e8f0;padding:4px 5px;font-size:9.4px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;color:#334155;border-top:1px solid #cbd5e1;border-bottom:1px solid #cbd5e1}
+  tr.sec .sec-count{font-weight:600;color:#64748b}
+  .col-index{width:26px}
+  .col-qty{width:64px}
+  @media print{@page{margin:6mm 7mm;size:A4}body{padding:0}thead th,tr.sec td,.disp,.ord,tbody tr:nth-child(even) td{-webkit-print-color-adjust:exact;print-color-adjust:exact}}
 </style></head>
 <body>
   <div class="hdr">
-    <h1>${project.name}</h1>
-    <div class="sub">${title}</div>
-    <div class="meta">${project.client.name} · ${printDate} · ${pendingRows.length} items</div>
+    <div>
+      <h1>${project.name}</h1>
+      <div class="sub">${title}</div>
+      <div class="client">${project.client.name}${project.poNumber ? ` · PO ${project.poNumber}` : ''}</div>
+    </div>
+    <div class="meta">${printDate}<br>${pendingRows.length} items</div>
   </div>
   <table>
     <thead><tr>
-      <th class="num" style="width:42px">#</th>
+      <th class="num col-index">#</th>
       <th>${t('reports.tables.product')}</th>
-      <th class="num">${t('projects.materials.table.planned')}</th>
-      <th class="num">${t('projects.materials.table.dispatched')}</th>
-      <th class="num">Stock</th>
-      <th class="num">To dispatch</th>
-      <th class="num">To order</th>
+      <th class="num col-qty">${t('projects.materials.table.planned')}</th>
+      <th class="num col-qty">${t('projects.materials.table.dispatched')}</th>
+      <th class="num col-qty">Stock</th>
+      <th class="num col-qty">To dispatch</th>
+      <th class="num col-qty">To order</th>
     </tr></thead>
-    <tbody>${rows}</tbody>
+    <tbody>${body}</tbody>
   </table>
   <script>window.onload=function(){window.print()}</script>
 </body></html>`
@@ -4381,57 +5475,67 @@ function MaterialsTab({
         }
 
         return (
-        <Card className={matAccent.card}>
+        <Card className={`${matAccent.card} flex flex-col overflow-hidden`}>
           {(dispatchRows.length > 0 || orderRows.length > 0) && (
-            <div className="border-b bg-amber-50/60 px-4 py-3">
-              <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <p className="text-sm font-semibold text-amber-950">Acciones pendientes</p>
-                  <p className="text-xs text-amber-800">
-                    {formatLocaleInteger(locale, dispatchRows.length)} por despachar desde stock · {formatLocaleInteger(locale, orderRows.length)} por volver a ordenar
-                  </p>
-                </div>
-                <div className="flex flex-wrap gap-2">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={materialActionFilter === 'dispatch' ? 'default' : 'outline'}
-                    className={materialActionFilter === 'dispatch' ? 'h-8 bg-emerald-600 text-white hover:bg-emerald-700' : 'h-8 bg-background'}
-                    onClick={() => setMaterialActionFilter(materialActionFilter === 'dispatch' ? 'all' : 'dispatch')}
-                  >
-                    <Send className="mr-1.5 h-3.5 w-3.5" />
-                    Dispatch pending
-                    <Badge variant="secondary" className="ml-1.5 h-5">{dispatchRows.length}</Badge>
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant={materialActionFilter === 'order' ? 'default' : 'outline'}
-                    className={materialActionFilter === 'order' ? 'h-8 bg-blue-600 text-white hover:bg-blue-700' : 'h-8 bg-background'}
-                    onClick={() => setMaterialActionFilter(materialActionFilter === 'order' ? 'all' : 'order')}
-                  >
-                    <ShoppingBag className="mr-1.5 h-3.5 w-3.5" />
-                    Order pending
-                    <Badge variant="secondary" className="ml-1.5 h-5">{orderRows.length}</Badge>
-                  </Button>
+            <div className="order-2 border-b bg-white px-4 py-3">
+              <div className="flex items-center gap-3 flex-wrap">
+                <span className="text-[11px] font-bold uppercase tracking-wide text-muted-foreground whitespace-nowrap">⚡ Acciones pendientes</span>
+
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => setMaterialActionFilter(materialActionFilter === 'dispatch' ? 'all' : 'dispatch')}
+                  className={`h-auto flex-col items-start gap-0.5 px-3 py-2 rounded-lg border-1.5 font-semibold transition ${
+                    materialActionFilter === 'dispatch'
+                      ? 'bg-emerald-600 border-emerald-600 text-white'
+                      : 'bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100'
+                  }`}
+                >
+                  <Send className="h-3.5 w-3.5 flex-shrink-0" />
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-lg font-extrabold leading-none tabular-nums">{formatLocaleInteger(locale, dispatchRows.length)}</span>
+                    <span className="text-[10px] uppercase tracking-wide leading-none">Despachar</span>
+                  </div>
+                  <span className="text-[9px] opacity-85">desde stock</span>
+                </Button>
+
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() => setMaterialActionFilter(materialActionFilter === 'order' ? 'all' : 'order')}
+                  className={`h-auto flex-col items-start gap-0.5 px-3 py-2 rounded-lg border-1.5 font-semibold transition ${
+                    materialActionFilter === 'order'
+                      ? 'bg-blue-600 border-blue-600 text-white'
+                      : 'bg-blue-50 border-blue-200 text-blue-700 hover:bg-blue-100'
+                  }`}
+                >
+                  <ShoppingBag className="h-3.5 w-3.5 flex-shrink-0" />
+                  <div className="flex items-baseline gap-1.5">
+                    <span className="text-lg font-extrabold leading-none tabular-nums">{formatLocaleInteger(locale, orderRows.length)}</span>
+                    <span className="text-[10px] uppercase tracking-wide leading-none">Pedir</span>
+                  </div>
+                  <span className="text-[9px] opacity-85">re-ordenar</span>
+                </Button>
+
+                <div className="ml-auto flex items-center gap-1">
                   {materialActionFilter !== 'all' && (
-                    <Button type="button" size="sm" variant="ghost" className="h-8" onClick={() => setMaterialActionFilter('all')}>
-                      Clear
+                    <Button type="button" variant="ghost" size="sm" className="h-6 px-2 text-xs" onClick={() => setMaterialActionFilter('all')}>
+                      Limpiar
                     </Button>
                   )}
                   <Button
                     type="button"
                     size="sm"
-                    variant="outline"
-                    className="h-8 bg-background"
+                    variant="ghost"
+                    className="h-6 px-2 text-xs"
                     onClick={handlePrintPendingActions}
                   >
-                    <Printer className="mr-1.5 h-3.5 w-3.5" />
-                    Print filtered
+                    <Printer className="mr-1 h-3.5 w-3.5" />
+                    Imprimir pendientes
                   </Button>
                 </div>
               </div>
-              <div className="mt-3 grid gap-2 md:grid-cols-2">
+              <div className="hidden">
                 {dispatchRows.slice(0, 3).map((row) => (
                   <button
                     key={`dispatch-${row.mat.id}`}
@@ -4441,7 +5545,7 @@ function MaterialsTab({
                   >
                     <span className="min-w-0">
                       <span className="block truncate text-sm font-medium">{row.mat.product.name}</span>
-                      <span className="text-xs text-muted-foreground">Need {formatLocaleInteger(locale, Math.min(row.gap, row.inStock))} to dispatch</span>
+                      <span className="text-xs text-muted-foreground">Need {formatLocaleInteger(locale, Math.min(row.gap, row.inStock + row.cuttableStock))} to dispatch</span>
                     </span>
                     <Send className="h-4 w-4 shrink-0 text-emerald-700" />
                   </button>
@@ -4463,258 +5567,174 @@ function MaterialsTab({
               </div>
             </div>
           )}
-          {/* Buscador rápido + botón de impresión */}
-          <CardHeader className={`sticky top-40 z-20 border-b px-4 py-3 bg-card/95 backdrop-blur supports-[backdrop-filter]:bg-card/90 ${matAccent.card}`}>
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <CardTitle className="text-sm font-semibold">
-                {t('projects.tabs.materials')}{' '}
-                <span className="text-muted-foreground font-normal">
-                  ({visibleRows.length}
-                  {visibleRows.length !== project.materials.length ? ` / ${project.materials.length}` : ''})
-                </span>
-              </CardTitle>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-              <div className="relative w-full sm:w-80">
-                <Search className="absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
-                <Input
-                  placeholder={t('projects.materials.searchPlaceholder')}
-                  value={matSearch}
-                  onChange={(e) => setMatSearch(e.target.value)}
-                  className="h-8 pl-8 pr-8 text-xs"
-                />
-                {matSearch && (
-                  <button
-                    type="button"
-                    onClick={() => setMatSearch('')}
-                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                  >
-                    <X className="h-3.5 w-3.5" />
-                  </button>
-                )}
+          {/* Toolbar slim: contador + barra de cobertura global + print/export */}
+          {/* Calcular cobertura global para visualización */}
+          {(() => {
+            let coveredCount = 0, partialCount = 0, missingCount = 0
+            for (const mat of project.materials) {
+              const coverage = getMaterialCoverage(mat)
+              if (coverage.uncovered === 0) coveredCount++
+              else if (coverage.remaining > 0) partialCount++
+              else missingCount++
+            }
+            const total = project.materials.length
+            const covPct = total > 0 ? Math.round((coveredCount / total) * 100) : 0
+            const partPct = total > 0 ? Math.round((partialCount / total) * 100) : 0
+            const missPct = total > 0 ? Math.round((missingCount / total) * 100) : 0
+
+            return (
+            <div className="order-1 flex items-center justify-between gap-3 border-b bg-card px-4 py-2">
+              <span className="text-sm font-semibold text-foreground whitespace-nowrap">
+                {t('projects.tabs.materials')}
+              </span>
+              <span className="text-xs font-semibold tabular-nums text-muted-foreground whitespace-nowrap">
+                {visibleRows.length}{visibleRows.length !== project.materials.length ? ` / ${project.materials.length}` : ''}
+              </span>
+
+              {/* Global coverage bar */}
+              <div className="flex-1 flex items-center gap-1.5">
+                <div className="h-1.5 flex-1 rounded-full bg-muted overflow-hidden flex gap-0.5">
+                  {coveredCount > 0 && <div className="bg-emerald-500" style={{ width: `${covPct}%` }} />}
+                  {partialCount > 0 && <div className="bg-amber-400" style={{ width: `${partPct}%` }} />}
+                  {missingCount > 0 && <div className="bg-rose-400" style={{ width: `${missPct}%` }} />}
+                </div>
               </div>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={handlePrintMaterials}
-                className="h-8 w-8 p-0 shrink-0 text-muted-foreground hover:text-foreground"
-                title={locale === 'es' ? 'Imprimir lista de materiales' : 'Print materials list'}
-              >
-                <Printer className="h-4 w-4" />
-              </Button>
-              <Button
-                type="button"
-                variant="ghost"
-                size="sm"
-                onClick={() => void handleExportMaterialsExcel()}
-                className="h-8 w-8 p-0 shrink-0 text-muted-foreground hover:text-foreground"
-                title={locale === 'es' ? 'Exportar lista a Excel' : 'Export materials to Excel'}
-                disabled={visibleRows.length === 0}
-              >
-                <FileSpreadsheet className="h-4 w-4" />
-              </Button>
+
+              <div className="flex items-center gap-1">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={handlePrintMaterials}
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                  title={locale === 'es' ? 'Imprimir lista completa' : 'Print complete list'}
+                >
+                  <Printer className="h-3.5 w-3.5" />
+                </Button>
+                {visibleRows.length !== project.materials.length && (
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="sm"
+                    onClick={handlePrintFilteredMaterials}
+                    className="h-7 w-7 p-0 text-amber-600 hover:text-amber-700 border border-amber-200 bg-amber-50 hover:bg-amber-100"
+                    title={locale === 'es' ? `Imprimir filtrado (${visibleRows.length} elementos)` : `Print filtered (${visibleRows.length} items)`}
+                  >
+                    <PrinterCheck className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => void handleExportMaterialsExcel()}
+                  className="h-7 w-7 p-0 text-muted-foreground hover:text-foreground"
+                  title={locale === 'es' ? 'Exportar lista a Excel' : 'Export materials to Excel'}
+                  disabled={visibleRows.length === 0}
+                >
+                  <FileSpreadsheet className="h-3.5 w-3.5" />
+                </Button>
               </div>
             </div>
-            {q && (
-              <p className="mt-1 text-xs text-muted-foreground">
-                {visibleRows.length === 0
-                  ? t('projects.materials.searchNoResults')
-                  : t('projects.materials.searchResults', {
-                      count: formatLocaleInteger(locale, visibleRows.length),
-                      total: formatLocaleInteger(locale, project.materials.length),
-                    })}
-              </p>
-            )}
-          </CardHeader>
-          <Table>
-            <TableHeader>
-              <TableRow className={matAccent.header}>
-                <TableHead className="w-[64px] text-right">#</TableHead>
-                <TableHead>{t('reports.tables.product')}</TableHead>
-                <TableHead className="text-right">{t('projects.materials.table.planned')}</TableHead>
-                <TableHead className="text-right">{t('projects.materials.table.dispatched')}</TableHead>
-                <TableHead className="text-right">{t('projects.materials.table.returned')}</TableHead>
-                <TableHead className="min-w-[180px]">{t('reports.tables.progress')}</TableHead>
-                <TableHead className="w-[60px]"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {visibleRows.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={7} className="py-10 text-center text-sm text-muted-foreground">
-                    {t('projects.materials.searchNoResults')}
-                  </TableCell>
-                </TableRow>
-              ) : null}
-              {visibleRows.map((row, index) => {
-                const { mat, returned, inStock, gap, uncovered, canDispatch, needsPurchase } = row
-                return (
-                <TableRow key={mat.id}>
-                  <TableCell className="text-right font-medium tabular-nums text-muted-foreground">
-                    {formatLocaleInteger(locale, index + 1)}
-                  </TableCell>
-                  <TableCell>
-                    <div>
-                      <p className="font-medium text-sm">{mat.product.name}</p>
-                      <p className="text-xs text-muted-foreground">{mat.product.code}</p>
-                      {(mat.engineeringSection || mat.product?.engineeringSection) ? (
-                        <Badge variant="secondary" className="mt-1 text-[10px]">
-                          {mat.engineeringSection || mat.product?.engineeringSection}
-                        </Badge>
-                      ) : null}
-                      {uncovered > 0 && !isPostDispatch && (
-                        <div className="mt-1 flex items-center gap-1.5">
-                          <Badge className="bg-amber-100 text-amber-800 hover:bg-amber-100 border-amber-200 text-[10px] px-1.5 py-0 h-4">
-                            {t('projects.materials.coverageGap', { count: formatLocaleInteger(locale, uncovered) })}
-                          </Badge>
-                          <button
-                            type="button"
-                            className="text-[10px] text-blue-700 underline hover:text-blue-800"
-                            onClick={() => openComplementDialog(mat, uncovered)}
-                            title={t('projects.materials.complementTitle')}
-                          >
-                            {t('projects.actions.complement')}
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">
-                    {editingMaterialId === mat.id ? (
-                      <div className="flex items-center justify-end gap-1">
-                        <Input
-                          type="number"
-                          min={mat.dispatchedQuantity || 1}
-                          step="any"
-                          value={editingQty}
-                          onChange={(e) => setEditingQty(e.target.value)}
-                          onKeyDown={(e) => {
-                            if (e.key === 'Enter') saveEdit(mat.id, mat.dispatchedQuantity)
-                            if (e.key === 'Escape') { setEditingMaterialId(null); setEditingQty('') }
-                          }}
-                          autoFocus
-                          className="h-7 w-20 text-right"
-                          disabled={editMaterialMutation.isPending}
-                        />
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-emerald-600 hover:bg-emerald-50"
-                          onClick={() => saveEdit(mat.id, mat.dispatchedQuantity)}
-                          disabled={editMaterialMutation.isPending}
-                          title={t('common.saveChanges')}
-                        >
-                          <Check className="h-3.5 w-3.5" />
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 text-muted-foreground"
-                          onClick={() => { setEditingMaterialId(null); setEditingQty('') }}
-                          disabled={editMaterialMutation.isPending}
-                          title={t('common.cancel')}
-                        >
-                          <X className="h-3.5 w-3.5" />
-                        </Button>
-                      </div>
-                    ) : (
-                      <button
-                        type="button"
-                        className="group inline-flex items-center gap-1 hover:text-amber-700"
-                        onClick={() => { setEditingMaterialId(mat.id); setEditingQty(String(mat.plannedQuantity)) }}
-                        title={t('projects.actions.editQuantity')}
-                        disabled={isPostDispatch}
-                      >
-                        <span>{mat.plannedQuantity}</span>
-                        {!isPostDispatch && (
-                          <Edit3 className="h-3 w-3 opacity-0 group-hover:opacity-60" />
-                        )}
-                      </button>
-                    )}
-                  </TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">{mat.dispatchedQuantity}</TableCell>
-                  <TableCell className="text-right font-medium tabular-nums">
-                    {returned > 0 ? (
-                      <span className="text-amber-600">{returned}</span>
-                    ) : (
-                      <span className="text-muted-foreground">0</span>
-                    )}
-                  </TableCell>
-                  <TableCell>
-                    <MaterialProgressBar dispatched={mat.dispatchedQuantity} planned={mat.plannedQuantity} />
-                  </TableCell>
-                  <TableCell>
-                    <div className="flex items-center justify-end gap-1">
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-blue-700"
-                        onClick={() => openSwitchMaterial(mat)}
-                        disabled={isPostDispatch || mat.dispatchedQuantity > 0}
-                        title={
-                          mat.dispatchedQuantity > 0
-                            ? t('projects.materials.switchBlockedDispatched')
-                            : t('projects.actions.switchMaterial')
-                        }
-                      >
-                        <ChevronsUpDown className="h-4 w-4" />
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-amber-700"
-                        onClick={() => { setEditingMaterialId(mat.id); setEditingQty(String(mat.plannedQuantity)) }}
-                        disabled={isPostDispatch}
-                        title={t('projects.actions.editQuantity')}
-                      >
-                        <Edit3 className="h-4 w-4" />
-                      </Button>
-                      {canDispatch && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 gap-1 text-emerald-700 hover:bg-emerald-50"
-                          title={t('projects.materials.dispatchTooltip', {
-                            count: formatLocaleInteger(locale, Math.min(gap, inStock)),
-                          })}
-                          onClick={() => { setQuickMat(mat); setQuickMode('dispatch') }}
-                        >
-                          <Send className="h-3.5 w-3.5" />
-                          <span className="text-xs">{t('projects.actions.dispatch')}</span>
-                        </Button>
-                      )}
-                      {needsPurchase && (
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-8 gap-1 text-blue-700 hover:bg-blue-50"
-                          title={t('projects.materials.requestTooltip', {
-                            count: formatLocaleInteger(locale, uncovered),
-                          })}
-                          onClick={() => { setQuickMat(mat); setQuickMode('request'); setQuickSupplierId('') }}
-                        >
-                          <ShoppingBag className="h-3.5 w-3.5" />
-                          <span className="text-xs">{t('projects.actions.request')}</span>
-                        </Button>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        className="h-8 w-8 text-muted-foreground hover:text-rose-600"
-                        onClick={() => setDeleteMaterialId(mat.id)}
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </Button>
-                    </div>
-                  </TableCell>
-                </TableRow>
-                )
-              })}
-            </TableBody>
-          </Table>
+            )
+          })()}
+          {/* Lista compacta — misma estética que en modo split */}
+          <div className="order-3 h-[76vh] min-h-[560px] overflow-hidden">
+            <MaterialsCompactView
+              materials={materialRows.map<CompactMaterial>((row) => ({
+                id: row.mat.id,
+                productId: row.mat.productId,
+                productName: row.mat.product.name,
+                productCode: row.mat.product.code,
+                section: row.mat.engineeringSection || row.mat.product?.engineeringSection || 'Sin sección',
+                plannedQuantity: row.mat.plannedQuantity,
+                dispatchedQuantity: row.mat.dispatchedQuantity,
+                returnedQuantity: row.returned,
+                notes: row.mat.notes ?? '',
+                canDispatch: row.canDispatch,
+                needsPurchase: row.needsPurchase,
+                inStock: row.inStock,
+                uncovered: row.uncovered,
+                gap: row.gap,
+                cuttableStock: row.cuttableStock,
+                cutSourceLabel: row.bestCutSource?.code,
+                cutSourceLength: row.bestCutSource?.sourceLength,
+              }))}
+              scrollStorageKey={`mat-materials-list-scroll-${project.id}`}
+              isPostDispatch={isPostDispatch}
+              search={matSearch}
+              onSearchChange={setMatSearch}
+              actionFilter={materialActionFilter}
+              onActionFilterChange={setMaterialActionFilter}
+              editingMaterialId={editingMaterialId}
+              editingQty={editingQty}
+              onEditingQtyChange={setEditingQty}
+              onStartEdit={(mat) => {
+                setEditingMaterialId(mat.id)
+                setEditingQty(String(mat.plannedQuantity))
+              }}
+              onCancelEdit={() => {
+                setEditingMaterialId(null)
+                setEditingQty('')
+              }}
+              onSaveEdit={(matId, dispatched) => saveEdit(matId, dispatched)}
+              isEditPending={editMaterialMutation.isPending}
+              editingNoteMaterialId={editingNoteMaterialId}
+              editingNote={editingNote}
+              onEditingNoteChange={setEditingNote}
+              onStartEditNote={(mat) => {
+                setEditingNoteMaterialId(mat.id)
+                setEditingNote(mat.notes)
+              }}
+              onCancelEditNote={() => {
+                setEditingNoteMaterialId(null)
+                setEditingNote('')
+              }}
+              onSaveEditNote={(matId) => saveNoteEdit(matId)}
+              isEditNotePending={editMaterialNotesMutation.isPending}
+              onDelete={(matId) => setDeleteMaterialId(matId)}
+              onDispatch={(mat) => {
+                const fullMat = project.materials.find((m) => m.id === mat.id)
+                if (!fullMat) return
+                setQuickMat(fullMat)
+                setQuickMode('dispatch')
+              }}
+              onRequest={(mat) => {
+                const fullMat = project.materials.find((m) => m.id === mat.id)
+                if (!fullMat) return
+                setQuickMat(fullMat)
+                setQuickMode('request')
+                setQuickSupplierId('')
+              }}
+              onSwitch={(mat) => {
+                const fullMat = project.materials.find((m) => m.id === mat.id)
+                if (fullMat) openSwitchMaterial(fullMat)
+              }}
+            />
+          </div>
         </Card>
         )
       })()}
+        </div>
+        {splitView.enabled && !splitView.listCollapsed && (
+          <SplitDragHandle containerRef={workspaceRef} onResize={splitView.setRatio} />
+        )}
+        {splitView.enabled && (
+          <div className="min-h-0 min-w-0 overflow-hidden">
+            <PlanPdfPane
+              projectId={project.id}
+              documents={(project.documents || []).map((d) => ({
+                id: d.id,
+                fileName: d.fileName,
+                fileType: d.fileType,
+                category: d.category,
+              }))}
+              selectedPlanId={splitView.selectedPlanId}
+              onSelectPlan={splitView.setSelectedPlanId}
+            />
+          </div>
+        )}
+      </div>
 
       {/* Add Material Dialog */}
       <Dialog open={addDialogOpen} onOpenChange={setAddDialogOpen}>
@@ -5084,6 +6104,225 @@ function MaterialsTab({
                     </div>
                   </div>
 
+                  {/* Cut from longer source product — appears when there's no stock
+                      of the planned product but a same-family/longer product exists.
+                      Looks for sources in BOTH shelf stocks AND recepción items. */}
+                  {quickMode === 'dispatch' && (() => {
+                    const shelfSources = findCutSources(quickMat, products)
+                    const recepcionSources = findRecepcionCutSources(quickMat, recepcionCutCandidates)
+                    const cutSources = [...shelfSources, ...recepcionSources]
+                    if (cutSources.length === 0) return null
+
+                    const selectedSourceKey = cutFromRecepcionItemId
+                      ? `recep:${cutFromRecepcionItemId}`
+                      : cutFromProductId
+                        ? `shelf:${cutFromProductId}`
+                        : null
+                    const selectedSource = cutSources.find((s) => s.sourceKey === selectedSourceKey)
+                    const cutNeeded = alloc.gap
+                    // For the cut plan, build a virtual source product from the selected source
+                    const virtualSourceProduct = selectedSource
+                      ? {
+                          code: selectedSource.code,
+                          name: selectedSource.name,
+                          unitQuantity: selectedSource.unitSize,
+                        }
+                      : null
+                    const cutPlan = virtualSourceProduct ? computeCutPlan(cutNeeded, quickMat.product, virtualSourceProduct) : null
+                    const targetSize = cutPlan?.targetLength ?? detectCutLength(quickMat.product) ?? 0
+                    const sourceSize = cutPlan?.sourceLength ?? selectedSource?.unitSize ?? 0
+                    const piecesNeeded = cutPlan?.sourcePiecesNeeded ?? 0
+                    const totalConsumed = piecesNeeded * sourceSize
+                    const usedLength = cutNeeded * targetSize
+                    const remainderLength = Math.max(0, totalConsumed - usedLength)
+
+                    const selectSource = (src: CutSourceCandidate) => {
+                      const isSelected = src.sourceKey === selectedSourceKey
+                      if (isSelected) {
+                        setCutFromProductId(null)
+                        setCutFromShelfId(null)
+                        setCutFromRecepcionItemId(null)
+                      } else if (src.kind === 'recepcion') {
+                        setCutFromProductId(null)
+                        setCutFromShelfId(null)
+                        setCutFromRecepcionItemId(src.recepcionItemId)
+                      } else {
+                        setCutFromRecepcionItemId(null)
+                        setCutFromProductId(src.productId)
+                        setCutFromShelfId(src.bestShelfId)
+                      }
+                    }
+
+                    return (
+                      <div className="rounded-lg border-2 border-dashed border-sky-300 bg-sky-50/60 p-3 space-y-2.5">
+                        <div className="flex items-center gap-2">
+                          <Scissors className="h-4 w-4 text-sky-700" />
+                          <span className="text-[11px] font-bold uppercase tracking-wide text-sky-900">
+                            Cortar desde pieza más larga
+                          </span>
+                        </div>
+
+                        {/* Sub-group: shelf candidates */}
+                        {shelfSources.length > 0 && (
+                          <>
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-emerald-800 flex items-center gap-1.5 border-b border-emerald-200 pb-1">
+                              <Layers className="h-3 w-3" /> En inventario (estantería)
+                              <span className="ml-auto rounded bg-emerald-700 text-white px-1.5 py-0.5 text-[9px] font-bold">{shelfSources.length}</span>
+                            </div>
+                            <div className="space-y-1.5">
+                              {shelfSources.map((src) => {
+                                const isSelected = src.sourceKey === selectedSourceKey
+                                return (
+                                  <button
+                                    key={src.sourceKey}
+                                    type="button"
+                                    onClick={() => selectSource(src)}
+                                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md border-2 text-left transition ${
+                                      isSelected
+                                        ? 'border-sky-500 bg-white ring-2 ring-sky-200'
+                                        : 'border-border bg-background hover:border-sky-300 hover:bg-sky-50'
+                                    }`}
+                                  >
+                                    <span className="inline-flex h-8 w-10 items-center justify-center rounded bg-emerald-600 text-white text-[10px] font-bold font-mono">
+                                      {src.unitSize}{src.unitSize > 0 ? "'" : ''}
+                                    </span>
+                                    <span className="flex-1 min-w-0">
+                                      <span className="block text-sm font-semibold text-foreground truncate flex items-center gap-1.5">
+                                        {src.code}
+                                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-100 text-emerald-700">ESTANTE</span>
+                                      </span>
+                                      <span className="block text-[11px] text-muted-foreground font-mono truncate">
+                                        {src.shelfLabel}
+                                      </span>
+                                    </span>
+                                    <span className="rounded bg-slate-900 px-2 py-1 text-[10px] font-bold text-white tabular-nums shrink-0">
+                                      {src.totalPieces} pza{src.totalPieces !== 1 ? 's' : ''}
+                                    </span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </>
+                        )}
+
+                        {/* Sub-group: recepción candidates */}
+                        {recepcionSources.length > 0 && (
+                          <>
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-blue-800 flex items-center gap-1.5 border-b border-blue-200 pb-1">
+                              <Inbox className="h-3 w-3" /> En recepción (recién recibido)
+                              <span className="ml-auto rounded bg-blue-700 text-white px-1.5 py-0.5 text-[9px] font-bold">{recepcionSources.length}</span>
+                            </div>
+                            <div className="space-y-1.5">
+                              {recepcionSources.map((src) => {
+                                const isSelected = src.sourceKey === selectedSourceKey
+                                return (
+                                  <button
+                                    key={src.sourceKey}
+                                    type="button"
+                                    onClick={() => selectSource(src)}
+                                    className={`w-full flex items-center gap-2.5 px-3 py-2 rounded-md border-2 text-left transition ${
+                                      isSelected
+                                        ? 'border-sky-500 bg-white ring-2 ring-sky-200'
+                                        : 'border-border bg-background hover:border-blue-300 hover:bg-blue-50'
+                                    }`}
+                                  >
+                                    <span className="inline-flex h-8 w-10 items-center justify-center rounded bg-blue-600 text-white text-[10px] font-bold font-mono">
+                                      {src.unitSize}{src.unitSize > 0 ? "'" : ''}
+                                    </span>
+                                    <span className="flex-1 min-w-0">
+                                      <span className="block text-sm font-semibold text-foreground truncate flex items-center gap-1.5">
+                                        {src.code}
+                                        <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[9px] font-bold bg-blue-100 text-blue-700">📦 RECEPCIÓN</span>
+                                      </span>
+                                      <span className="block text-[11px] text-muted-foreground font-mono truncate">
+                                        {src.shelfLabel}
+                                      </span>
+                                    </span>
+                                    <span className="rounded bg-slate-900 px-2 py-1 text-[10px] font-bold text-white tabular-nums shrink-0">
+                                      {src.totalPieces} pza{src.totalPieces !== 1 ? 's' : ''}
+                                    </span>
+                                  </button>
+                                )
+                              })}
+                            </div>
+                          </>
+                        )}
+
+                        {/* Visualization + remainder options when a source is selected */}
+                        {selectedSource && cutNeeded > 0 && sourceSize > 0 && (
+                          <div className="space-y-2.5 pt-1">
+                            {/* Cut bar */}
+                            <div className="rounded-md border border-amber-200 bg-gradient-to-br from-amber-50 to-yellow-50 p-2.5">
+                              <div className="text-[10px] font-bold uppercase text-amber-800 mb-1.5">Resumen del corte</div>
+                              <div className="relative h-7 rounded bg-slate-200 overflow-hidden flex">
+                                <div
+                                  className="bg-gradient-to-r from-emerald-500 to-emerald-600 flex items-center justify-center text-white text-[11px] font-bold tabular-nums"
+                                  style={{ width: `${totalConsumed > 0 ? (usedLength / totalConsumed) * 100 : 0}%` }}
+                                >
+                                  {cutNeeded} pza Ã— {targetSize}'
+                                </div>
+                                {remainderLength > 0 && (
+                                  <div className="flex-1 bg-white/85 flex items-center justify-center text-slate-600 text-[11px] font-bold tabular-nums">
+                                    {remainderLength}' sobrante
+                                  </div>
+                                )}
+                              </div>
+                              <div className="flex justify-between text-[10px] text-slate-500 tabular-nums font-semibold mt-1">
+                                <span>0'</span>
+                                <span>{piecesNeeded} pza × {sourceSize}' = {totalConsumed}'</span>
+                              </div>
+                            </div>
+
+                            {/* Remainder handling */}
+                            {remainderLength > 0 && (
+                              <div className="space-y-1.5">
+                                <Label className="text-[11px] font-semibold">¿Qué hacer con el sobrante de {remainderLength}'?</Label>
+                                <div className="space-y-1">
+                                  {([
+                                    {
+                                      value: 'short-piece',
+                                      label: 'Guardar como pieza corta nueva',
+                                      desc: 'Se crea/actualiza un producto con el sobrante en el mismo estante',
+                                    },
+                                    {
+                                      value: 'reserved',
+                                      label: 'Reservar para este proyecto',
+                                      desc: 'Pieza completa asignada al proyecto, sobrante usable solo aquí',
+                                    },
+                                    {
+                                      value: 'scrap',
+                                      label: 'Desechar (scrap)',
+                                      desc: 'Sobrante perdido',
+                                    },
+                                  ] as const).map((opt) => (
+                                    <button
+                                      key={opt.value}
+                                      type="button"
+                                      onClick={() => setCutRemainderHandling(opt.value)}
+                                      className={`w-full flex items-start gap-2.5 px-2.5 py-2 rounded-md border text-left text-xs transition ${
+                                        cutRemainderHandling === opt.value
+                                          ? 'border-cyan-500 bg-cyan-50 ring-1 ring-cyan-200'
+                                          : 'border-border bg-background hover:bg-muted/40'
+                                      }`}
+                                    >
+                                      <span className={`mt-0.5 h-4 w-4 shrink-0 rounded-full border-2 flex items-center justify-center ${cutRemainderHandling === opt.value ? 'border-cyan-500' : 'border-muted-foreground/40'}`}>
+                                        {cutRemainderHandling === opt.value && <span className="h-2 w-2 rounded-full bg-cyan-500" />}
+                                      </span>
+                                      <span className="flex-1">
+                                        <span className="block font-semibold text-foreground">{opt.label}</span>
+                                        <span className="block text-[10px] text-muted-foreground">{opt.desc}</span>
+                                      </span>
+                                    </button>
+                                  ))}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )
+                  })()}
+
                   {/* Reserve stock toggle — only show when there is reserved stock */}
                   {quickMode === 'dispatch' && reservedStock > 0 && (
                     <div className={`flex items-center justify-between rounded-md border px-3 py-2 ${quickUseReserve ? 'border-amber-300 bg-amber-50' : 'border-amber-200 bg-amber-50/40'}`}>
@@ -5207,16 +6446,46 @@ function MaterialsTab({
                   {quickMode === 'dispatch' ? (
                     <Button
                       onClick={async () => {
+                        // Cross-cut from RECEPCIÓN path
+                        if (cutFromRecepcionItemId && alloc.gap > 0) {
+                          quickDispatchMutation.mutate({
+                            productId: quickMat.productId,
+                            picks: [{
+                              shelfId: '', // not used for recepción cut
+                              qty: alloc.gap,
+                              cutFromRecepcionItemId,
+                              remainderHandling: cutRemainderHandling,
+                            }],
+                          })
+                          return
+                        }
+                        // Cross-cut from SHELF path: when user picked a longer source product to cut from
+                        if (cutFromProductId && cutFromShelfId && alloc.gap > 0) {
+                          quickDispatchMutation.mutate({
+                            productId: quickMat.productId,
+                            picks: [{
+                              shelfId: cutFromShelfId,
+                              qty: alloc.gap,
+                              cutFromProductId,
+                              cutFromShelfId,
+                              remainderHandling: cutRemainderHandling,
+                            }],
+                          })
+                          return
+                        }
                         if (qReceptionPicks.length > 0) {
                           await quickReceptionDispatchMutation.mutateAsync({ items: qReceptionPicks })
                         }
                         if (qShelfPicks.length > 0) {
-                          quickDispatchMutation.mutate({ productId: quickMat.productId, picks: qShelfPicks })
+                          quickDispatchMutation.mutate({
+                            productId: quickMat.productId,
+                            picks: qShelfPicks,
+                          })
                         } else if (qReceptionPicks.length > 0) {
                           setQuickMat(null)
                         }
                       }}
-                      disabled={!qCanDispatch}
+                      disabled={!qCanDispatch && !cutFromProductId && !cutFromRecepcionItemId}
                       className="bg-emerald-600 hover:bg-emerald-700 text-white"
                     >
                       {(quickDispatchMutation.isPending || quickReceptionDispatchMutation.isPending) && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
@@ -5340,8 +6609,14 @@ function MaterialsTab({
       </Dialog>
 
       {/* Dispatch from Recepción Dialog */}
-      <Dialog open={dispatchRecepcionOpen} onOpenChange={setDispatchRecepcionOpen}>
-        <DialogContent className="sm:max-w-lg">
+      <Dialog
+        open={dispatchRecepcionOpen}
+        onOpenChange={(open) => {
+          setDispatchRecepcionOpen(open)
+          if (!open) setSelectedCrossProjectIds(new Set())
+        }}
+      >
+        <DialogContent className="sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Inbox className="h-5 w-5 text-emerald-600" />
@@ -5351,49 +6626,136 @@ function MaterialsTab({
               {t('projects.receptionDispatch.description')}
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-3 py-2">
-            {pendingRecepcion.length === 0 ? (
+          <div className="space-y-4 py-2">
+            {/* ─── Section A: Items belonging to this project ─── */}
+            {pendingRecepcion.length === 0 && crossProjectRecepcion.length === 0 ? (
               <p className="text-sm text-muted-foreground text-center py-6">
                 {t('projects.receptionDispatch.empty')}
               </p>
             ) : (
-              <div className="max-h-[50vh] overflow-y-auto rounded-md border">
-                <Table>
-                  <TableHeader className="sticky top-0 bg-background">
-                    <TableRow>
-                      <TableHead>{t('reports.tables.product')}</TableHead>
-                      <TableHead className="w-24 text-right">{t('reports.common.quantity')}</TableHead>
-                      <TableHead className="w-40">{t('projects.receptionDispatch.origin')}</TableHead>
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {pendingRecepcion.map((it) => (
-                      <TableRow key={it.id}>
-                        <TableCell>
-                          <div className="flex flex-col gap-0.5">
-                            <span className="text-sm font-medium">{it.product.name}</span>
-                            <span className="text-xs text-muted-foreground">{it.product.code}</span>
-                          </div>
-                        </TableCell>
-                        <TableCell className="text-right tabular-nums">
-                          {it.quantity} {it.product.unitOfMeasure}
-                        </TableCell>
-                        <TableCell>
-                          {it.purchase ? (
-                            <Badge variant="outline" className="font-mono text-xs">
-                              {it.purchase.poNumber
-                                ? `${it.purchase.poNumber} · ${it.purchase.purchaseCode}`
-                                : it.purchase.purchaseCode}
-                            </Badge>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">-</span>
-                          )}
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+              <>
+                <div>
+                  <div className="mb-2 flex items-center justify-between gap-2">
+                    <h4 className="text-xs font-bold uppercase tracking-wide text-emerald-700">
+                      Tu proyecto · {pendingRecepcion.length} {pendingRecepcion.length === 1 ? 'item' : 'items'}
+                    </h4>
+                  </div>
+                  {pendingRecepcion.length === 0 ? (
+                    <div className="rounded-md border border-dashed bg-muted/30 px-3 py-4 text-center text-xs text-muted-foreground">
+                      Sin recepciones propias para este proyecto
+                    </div>
+                  ) : (
+                    <div className="max-h-[30vh] overflow-y-auto rounded-md border">
+                      <Table>
+                        <TableHeader className="sticky top-0 bg-background">
+                          <TableRow>
+                            <TableHead>{t('reports.tables.product')}</TableHead>
+                            <TableHead className="w-24 text-right">{t('reports.common.quantity')}</TableHead>
+                            <TableHead className="w-40">{t('projects.receptionDispatch.origin')}</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {pendingRecepcion.map((it) => (
+                            <TableRow key={it.id}>
+                              <TableCell>
+                                <div className="flex flex-col gap-0.5">
+                                  <span className="text-sm font-medium">{it.product.name}</span>
+                                  <span className="text-xs text-muted-foreground">{it.product.code}</span>
+                                </div>
+                              </TableCell>
+                              <TableCell className="text-right tabular-nums">
+                                {it.quantity} {it.product.unitOfMeasure}
+                              </TableCell>
+                              <TableCell>
+                                {it.purchase ? (
+                                  <Badge variant="outline" className="font-mono text-xs">
+                                    {it.purchase.poNumber
+                                      ? `${it.purchase.poNumber} · ${it.purchase.purchaseCode}`
+                                      : it.purchase.purchaseCode}
+                                  </Badge>
+                                ) : (
+                                  <span className="text-xs text-muted-foreground">-</span>
+                                )}
+                              </TableCell>
+                            </TableRow>
+                          ))}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  )}
+                </div>
+
+                {/* ─── Section B: Cross-project suggestions ─── */}
+                {crossProjectRecepcion.length > 0 && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/50 dark:bg-amber-950/30">
+                    <div className="mb-2 flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+                      <div className="flex-1">
+                        <h4 className="text-xs font-bold uppercase tracking-wide text-amber-800 dark:text-amber-300">
+                          ¿Tomar de otros proyectos?
+                        </h4>
+                        <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                          Tu proyecto no cubre todos los materiales. Encontramos {crossProjectRecepcion.length} {crossProjectRecepcion.length === 1 ? 'item' : 'items'} en recepción de otros proyectos que podrían completarlo. Marca los que quieras consumir.
+                        </p>
+                      </div>
+                    </div>
+                    <div className="max-h-[24vh] overflow-y-auto rounded-md border bg-background">
+                      <Table>
+                        <TableHeader className="sticky top-0 bg-background">
+                          <TableRow>
+                            <TableHead className="w-10"></TableHead>
+                            <TableHead>{t('reports.tables.product')}</TableHead>
+                            <TableHead className="w-20 text-right">{t('reports.common.quantity')}</TableHead>
+                            <TableHead className="w-40">Proyecto origen</TableHead>
+                          </TableRow>
+                        </TableHeader>
+                        <TableBody>
+                          {crossProjectRecepcion.map((it) => {
+                            const checked = selectedCrossProjectIds.has(it.id)
+                            return (
+                              <TableRow
+                                key={it.id}
+                                className={`cursor-pointer ${checked ? 'bg-amber-50/60 dark:bg-amber-950/40' : ''}`}
+                                onClick={() => {
+                                  setSelectedCrossProjectIds((prev) => {
+                                    const next = new Set(prev)
+                                    if (next.has(it.id)) next.delete(it.id)
+                                    else next.add(it.id)
+                                    return next
+                                  })
+                                }}
+                              >
+                                <TableCell className="py-2">
+                                  <input
+                                    type="checkbox"
+                                    checked={checked}
+                                    onChange={() => {}}
+                                    className="h-4 w-4 rounded border-amber-400 text-amber-600 focus:ring-amber-400 cursor-pointer"
+                                  />
+                                </TableCell>
+                                <TableCell>
+                                  <div className="flex flex-col gap-0.5">
+                                    <span className="text-sm font-medium">{it.product.name}</span>
+                                    <span className="text-xs text-muted-foreground">{it.product.code}</span>
+                                  </div>
+                                </TableCell>
+                                <TableCell className="text-right tabular-nums text-sm">
+                                  {it.quantity} {it.product.unitOfMeasure}
+                                </TableCell>
+                                <TableCell>
+                                  <Badge variant="outline" className="text-[10px] border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+                                    {it.sourceProjectName ?? 'Otro proyecto'}
+                                  </Badge>
+                                </TableCell>
+                              </TableRow>
+                            )
+                          })}
+                        </TableBody>
+                      </Table>
+                    </div>
+                  </div>
+                )}
+              </>
             )}
             <p className="text-xs text-muted-foreground">
               {t('projects.receptionDispatch.helper')}
@@ -5405,13 +6767,13 @@ function MaterialsTab({
             </Button>
             <Button
               onClick={() => dispatchRecepcionMutation.mutate()}
-              disabled={pendingRecepcion.length === 0 || dispatchRecepcionMutation.isPending}
+              disabled={(pendingRecepcion.length === 0 && selectedCrossProjectIds.size === 0) || dispatchRecepcionMutation.isPending}
               className="bg-emerald-600 hover:bg-emerald-700 text-white gap-2"
             >
               <Send className="h-4 w-4" />
               {dispatchRecepcionMutation.isPending
                 ? t('projects.actions.dispatching')
-                : t('projects.receptionDispatch.confirm', { count: formatLocaleInteger(locale, pendingRecepcion.length) })}
+                : t('projects.receptionDispatch.confirm', { count: formatLocaleInteger(locale, pendingRecepcion.length + selectedCrossProjectIds.size) })}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -6239,6 +7601,108 @@ function detectReturnOriginalSize(candidate: { unitQuantity?: string | number; n
   const unitSize = getFirstNumber(candidate.unitQuantity)
   if (unitSize && unitSize > 0) return unitSize
   return getLastNumber(candidate.name) ?? getLastNumber(candidate.code)
+}
+
+// "INS-3X11-24'" → "INS-3X11"
+// Strips the trailing "-<size>'?" or " <size>'?" pattern.
+function stripTrailingSizeToken(value: string, size: number): string {
+  const sizeStr = formatReturnSize(size)
+  const escaped = sizeStr.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  // matches "-24" or " 24" or "x24" at the end (optionally with quote/feet/inches sign)
+  const pattern = new RegExp(`[\\s\\-xX]*${escaped}\\s*['"]?\\s*$`)
+  return value.replace(pattern, '').trim()
+}
+
+// Find candidate "source" products to cut from for the given target material.
+// A source candidate must:
+//   - share the same "root" (code/name prefix without the trailing size token)
+//   - have a unitSize STRICTLY larger than the target's unitSize
+//   - have at least 1 piece of available stock somewhere
+// Returns the best shelf (most stock) per candidate.
+type CutSourceCandidate = {
+  // Stable identifier per source — productId for shelf, recepcionItemId for recepción
+  sourceKey: string
+  kind: 'shelf' | 'recepcion'
+  productId: string
+  code: string
+  name: string
+  unitSize: number
+  totalPieces: number
+  // shelf-specific (empty for recepción)
+  bestShelfId: string
+  shelfLabel: string
+  // recepción-specific (null for shelf)
+  recepcionItemId: string | null
+  recepcionOrigin: string | null // e.g. "PO-2026-014" / "Return from Project X"
+}
+
+function findCutSources(
+  target: ProjectMaterial,
+  products: Array<{
+    id: string
+    code: string
+    name: string
+    unitQuantity?: string | number
+    shelfStocks?: Array<{
+      shelfId: string
+      quantity: string | number
+      shelf: { name: string; rack: { name: string; warehouse: { name: string } } }
+    }>
+  }>,
+): CutSourceCandidate[] {
+  return findCuttableSourcesForTarget(
+    {
+      id: target.productId,
+      code: target.product.code,
+      name: target.product.name,
+      color: target.product.color,
+      unitQuantity: target.product.unitQuantity,
+    },
+    products as Product[],
+  ).map<CutSourceCandidate>((source) => ({
+    sourceKey: `shelf:${source.productId}`,
+    kind: 'shelf',
+    productId: source.productId,
+    code: source.code,
+    name: source.name,
+    unitSize: source.sourceLength,
+    totalPieces: source.totalSourcePieces,
+    bestShelfId: source.bestShelfId,
+    shelfLabel: source.shelfLabel,
+    recepcionItemId: null,
+    recepcionOrigin: null,
+  }))
+}
+
+// Converts recepción cut candidates (from the dispatch-recepcion endpoint) into
+// the same CutSourceCandidate shape used by the picker UI. Filtered to candidates
+// whose targetProduct.id matches the dispatch dialog's planned product.
+function findRecepcionCutSources(
+  target: ProjectMaterial,
+  candidates: ProjectRecepcionCutCandidate[],
+): CutSourceCandidate[] {
+  return candidates
+    .filter((c) => c.targetProduct.id === target.productId)
+    .map<CutSourceCandidate>((c) => ({
+      sourceKey: `recep:${c.recepcionItemId}`,
+      kind: 'recepcion',
+      productId: c.sourceProduct.id,
+      code: c.sourceProduct.code,
+      name: c.sourceProduct.name,
+      unitSize: c.originalSize,
+      totalPieces: c.pieces,
+      bestShelfId: '',
+      shelfLabel: c.poNumber
+        ? `PO ${c.poNumber}`
+        : c.purchaseCode
+          ? c.purchaseCode
+          : c.sourceProjectName
+            ? `Recepción · ${c.sourceProjectName}`
+            : 'Recepción',
+      recepcionItemId: c.recepcionItemId,
+      recepcionOrigin: c.poNumber ?? c.purchaseCode ?? c.sourceProjectName ?? null,
+    }))
+    .sort((a, b) => a.unitSize - b.unitSize)
 }
 
 function formatReturnSize(value: number) {
@@ -7149,7 +8613,7 @@ function DocumentsTab({
   const isPasting = moveDocMutation.isPending || copyDocMutation.isPending
 
   useEffect(() => {
-    const handler = (e: KeyboardEvent) => {
+    const handler = (e: globalThis.KeyboardEvent) => {
       const tag = (e.target as HTMLElement)?.tagName
       if (tag === 'INPUT' || tag === 'TEXTAREA') return
 
@@ -7612,7 +9076,7 @@ function AddMaterialDialogContent({
     }
   }
 
-  const handleQtyKeyDown = (e: KeyboardEvent<HTMLInputElement>) => {
+  const handleQtyKeyDown = (e: ReactKeyboardEvent<HTMLInputElement>) => {
     if (e.key === 'Enter') {
       e.preventDefault()
       void submit(false)
