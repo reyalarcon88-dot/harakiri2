@@ -13,6 +13,7 @@ import {
   Edit3,
   ExternalLink,
   FileText,
+  Inbox,
   Loader2,
   RotateCw,
   Scissors,
@@ -674,6 +675,7 @@ export interface CompactMaterial {
   // Cobertura calculada
   canDispatch: boolean
   needsPurchase: boolean
+  availableFromOtherProject?: boolean
   inStock: number
   uncovered: number
   gap: number
@@ -710,6 +712,7 @@ interface MaterialsCompactViewProps {
   onDispatch: (mat: CompactMaterial) => void
   onRequest: (mat: CompactMaterial) => void
   onSwitch: (mat: CompactMaterial) => void
+  onOpenReception?: () => void
   // Botón opcional para colapsar la lista (solo en split mode con pane izquierdo)
   onCollapse?: () => void
   scrollStorageKey?: string
@@ -744,6 +747,7 @@ export function MaterialsCompactView({
   onDispatch,
   onRequest,
   onSwitch,
+  onOpenReception,
   onCollapse,
   scrollStorageKey,
 }: MaterialsCompactViewProps) {
@@ -1083,6 +1087,19 @@ export function MaterialsCompactView({
                         >
                           {mat.inStock > 0 ? <Send className="h-3 w-3" /> : <Scissors className="h-3 w-3" />}
                           {mat.inStock > 0 ? 'Despachar' : `Cortar ${mat.cutSourceLength ? `${mat.cutSourceLength}'` : ''}`}
+                        </Button>
+                      )}
+                      {mat.availableFromOtherProject && !mat.canDispatch && !isPostDispatch && onOpenReception && (
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7 gap-1 px-2 text-[11px] text-amber-700 hover:bg-amber-50"
+                          onClick={() => onOpenReception()}
+                          title="Disponible en recepción de otro proyecto — revisar para tomarlo"
+                        >
+                          <Inbox className="h-3 w-3" />
+                          En otro proyecto
                         </Button>
                       )}
                       {mat.needsPurchase && (

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { db } from '@/lib/db'
+import { sortMaterialsForDisplay } from '@/lib/material-sort'
 import path from 'path'
 import { readFileSync } from 'fs'
 import { mkdir, writeFile } from 'fs/promises'
@@ -545,6 +546,11 @@ export async function GET(
       return NextResponse.json({ error: 'Purchase not found' }, { status: 404 })
     }
 
+    // Same canonical ordering as the on-screen materials list (by engineering
+    // section → family → dimensions) so the PDF never shows items in raw
+    // insertion order (which put later-added items like washers at the end).
+    const sortedItems = sortMaterialsForDisplay(purchase.items)
+
     // Resolve delivery address according to chosen destination
     let deliveryLabel: string | undefined
     let deliveryAddress: string | undefined
@@ -576,7 +582,7 @@ export async function GET(
     let pdfBuffer: Buffer
 
     if (purchase.status === 'pedido') {
-      const items = purchase.items.map((item, idx) => ({
+      const items = sortedItems.map((item, idx) => ({
         num: idx + 1,
         code: item.product.code,
         name: item.product.name,
@@ -601,7 +607,7 @@ export async function GET(
         />
       ).toBuffer())
     } else {
-      const items = purchase.items.map((item, idx) => ({
+      const items = sortedItems.map((item, idx) => ({
         num: idx + 1,
         code: item.product.code,
         name: item.product.name,

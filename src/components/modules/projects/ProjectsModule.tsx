@@ -1,6 +1,7 @@
 'use client'
 
 import { compareStructuralFrameMaterials, compareFastenerMaterials, extractDimensions, getProductFamily, compareMaterialsByDimensions } from '@/lib/structural-frame-sort'
+import { sortMaterialsForDisplay } from '@/lib/material-sort'
 import { useState, useRef, useMemo, useEffect, useCallback, type KeyboardEvent as ReactKeyboardEvent } from 'react'
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { toast } from 'sonner'
@@ -174,6 +175,8 @@ interface ReturnItem {
   productReturned: { id: string; name: string; code: string } | null
   shelfFrom: { id: string; name: string; rack: { id: string; name: string; warehouse: { id: string; name: string } } } | null
   shelfTo: { id: string; name: string; rack: { id: string; name: string; warehouse: { id: string; name: string } } } | null
+  returnDestination?: string
+  scrapCharged?: boolean
 }
 
 interface Return {
@@ -416,9 +419,12 @@ function calculateReturnedMaterialCredit(project: Project): number {
     if (returnOrder.status !== 'completed') return sum
 
     return sum + (returnOrder.items || []).reduce((itemSum, item) => {
-      const productId = item.productIdDelivered || item.productReturned?.id || ''
-      const quantity = toFiniteNumber(item.quantityDelivered || item.quantityReturned)
-      const unitPrice = priceByProduct.get(productId) || 0
+      // La merma no vuelve al almacén: no genera crédito.
+      if (item.returnDestination === 'scrap') return itemSum
+      const returnedId = item.productReturned?.id || item.productIdDelivered || ''
+      const quantity = toFiniteNumber(item.quantityReturned || item.quantityDelivered)
+      // Los remanentes auto-creados no están en materials; usan el precio del producto original.
+      const unitPrice = priceByProduct.get(returnedId) ?? priceByProduct.get(item.productIdDelivered) ?? 0
       return itemSum + quantity * unitPrice
     }, 0)
   }, 0)
@@ -3769,54 +3775,6 @@ function InfoTab({
 
 // ─── Materials Tab ────────────────────────────────────────────────────────────
 
-/**
- * Orden visual canónico de materiales en este módulo: por sección de
- * ingeniería, luego comparadores especiales para Structural Frame /
- * Fasteners, luego familia + dimensiones, con anchor por grupo para
- * mantener cohesión visual. Se reusa en MaterialsTab y en cualquier
- * diálogo derivado (ej. "Pedir materiales faltantes") para que el orden
- * sea siempre el mismo que ve el usuario en la tabla.
- */
-function sortMaterialsForDisplay(materials: ProjectMaterial[]): ProjectMaterial[] {
-  const groupMinOrder = new Map<string, number>()
-  for (const mat of materials) {
-    const matSection = mat.engineeringSection || mat.product?.engineeringSection || ''
-    const key = `${matSection}|${getProductFamily(mat.product?.name || '')}`
-    const cur = groupMinOrder.get(key) ?? Infinity
-    groupMinOrder.set(key, Math.min(cur, mat.sortOrder ?? 0))
-  }
-
-  return materials.slice().sort((a, b) => {
-    const aSection = a.engineeringSection || a.product?.engineeringSection || ''
-    const bSection = b.engineeringSection || b.product?.engineeringSection || ''
-    const sectionDiff = getSectionOrder(aSection) - getSectionOrder(bSection)
-    if (sectionDiff !== 0) return sectionDiff
-
-    if (aSection === 'Structural Frame' && bSection === 'Structural Frame') {
-      return compareStructuralFrameMaterials(a.product?.name || '', b.product?.name || '')
-    }
-
-    if (aSection === 'Fasteners & Hardware' && bSection === 'Fasteners & Hardware') {
-      return compareFastenerMaterials(a.product?.name || '', b.product?.name || '')
-    }
-
-    const aName = a.product?.name || ''
-    const bName = b.product?.name || ''
-    const aFamily = getProductFamily(aName)
-    const bFamily = getProductFamily(bName)
-
-    if (aFamily === bFamily) {
-      return compareMaterialsByDimensions(aName, bName)
-    }
-
-    const aKey = `${aSection}|${aFamily}`
-    const bKey = `${bSection}|${bFamily}`
-    const aGroupOrder = groupMinOrder.get(aKey) ?? (a.sortOrder ?? 0)
-    const bGroupOrder = groupMinOrder.get(bKey) ?? (b.sortOrder ?? 0)
-    return aGroupOrder - bGroupOrder
-  })
-}
-
 function normalizeSwitchText(value: unknown): string {
   return String(value ?? '').trim().toLowerCase()
 }
@@ -4426,6 +4384,18 @@ function MaterialsTab({
     return map
   }, [pendingRecepcion])
 
+  // Same as recepcionByProduct but for items sitting in OTHER projects' recepción
+  // (exact product match). These are NOT auto-counted as available stock — taking
+  // them is always opt-in via the "Despachar de Recepción" dialog — but we use this
+  // to mark a material as "available from another project" instead of "needs purchase".
+  const crossProjectRecepcionByProduct = useMemo(() => {
+    const map = new Map<string, number>()
+    for (const item of crossProjectRecepcion) {
+      map.set(item.product.id, (map.get(item.product.id) || 0) + Number(item.quantity))
+    }
+    return map
+  }, [crossProjectRecepcion])
+
   const getMaterialCoverage = (mat: ProjectMaterial) => {
     const product = products.find((p) => p.id === mat.productId)
     const shelfStock = product?._availableShelfStock ?? product?._totalShelfStock ?? product?.currentStock ?? 0
@@ -4459,6 +4429,9 @@ function MaterialsTab({
     const totalCuttable = cuttableStock + recepcionCuttableStock
     const uncovered = Math.max(remaining - purchased - inStock - totalCuttable, 0)
     const bestCutSource = cutSources[0] || null
+    // Exact-match stock available in OTHER projects' recepción (opt-in only).
+    const crossProjectStock = crossProjectRecepcionByProduct.get(mat.productId) ?? 0
+    const availableFromOtherProject = crossProjectStock > 0 && remaining > 0
 
     return {
       product,
@@ -4473,6 +4446,8 @@ function MaterialsTab({
       recepcionCuttableStock,
       bestCutSource,
       uncovered,
+      crossProjectStock,
+      availableFromOtherProject,
     }
   }
 
@@ -4813,8 +4788,10 @@ function MaterialsTab({
       plannedQuantity: mat.plannedQuantity,
       dispatchedQuantity: mat.dispatchedQuantity,
       returnedQuantity: returnedByProduct.get(mat.productId) || 0,
+      notes: mat.notes ?? '',
       canDispatch: gap > 0 && (coverage.inStock > 0 || coverage.cuttableStock > 0) && !isPostDispatch,
       needsPurchase: coverage.uncovered > 0 && !isPostDispatch,
+      availableFromOtherProject: coverage.availableFromOtherProject && !isPostDispatch,
       inStock: coverage.inStock,
       uncovered: coverage.uncovered,
       gap,
@@ -4897,7 +4874,7 @@ function MaterialsTab({
             {t('projects.actions.requestMissingMaterials')}
           </Button>
         )}
-        {pendingRecepcion.length > 0 && (
+        {pendingRecepcion.length > 0 ? (
           <Button
             size="sm"
             onClick={() => setDispatchRecepcionOpen(true)}
@@ -4909,7 +4886,19 @@ function MaterialsTab({
               {pendingRecepcion.length}
             </span>
           </Button>
-        )}
+        ) : crossProjectRecepcion.length > 0 ? (
+          <Button
+            size="sm"
+            onClick={() => setDispatchRecepcionOpen(true)}
+            className="gap-2 bg-amber-600 text-white hover:bg-amber-700 ring-2 ring-amber-300 ring-offset-2"
+          >
+            <Inbox className="h-4 w-4" />
+            {t('projects.actions.reviewOtherProjectsReception')}
+            <span className="rounded-full bg-white px-2 py-0.5 text-xs font-semibold text-amber-700">
+              {crossProjectRecepcion.length}
+            </span>
+          </Button>
+        ) : null}
       </div>
       )}
 
@@ -4959,6 +4948,7 @@ function MaterialsTab({
                 notes: mat.notes ?? '',
                 canDispatch: gap > 0 && (coverage.inStock > 0 || coverage.cuttableStock > 0) && !isPostDispatch,
                 needsPurchase: coverage.uncovered > 0 && !isPostDispatch,
+                availableFromOtherProject: coverage.availableFromOtherProject && !isPostDispatch,
                 inStock: coverage.inStock,
                 uncovered: coverage.uncovered,
                 gap,
@@ -5017,6 +5007,7 @@ function MaterialsTab({
               const fullMat = project.materials.find((m) => m.id === mat.id)
               if (fullMat) openSwitchMaterial(fullMat)
             }}
+            onOpenReception={() => setDispatchRecepcionOpen(true)}
           />
         )
       ) : project.materials.length === 0 ? (
@@ -5035,6 +5026,7 @@ function MaterialsTab({
           const gap = coverage.remaining
           const canDispatch = gap > 0 && (coverage.inStock > 0 || coverage.cuttableStock > 0) && !isPostDispatch
           const needsPurchase = coverage.uncovered > 0 && !isPostDispatch
+          const availableFromOtherProject = coverage.availableFromOtherProject && !isPostDispatch
 
           return {
             mat,
@@ -5046,6 +5038,7 @@ function MaterialsTab({
             uncovered: coverage.uncovered,
             canDispatch,
             needsPurchase,
+            availableFromOtherProject,
           }
         })
         const dispatchRows = materialRows.filter((row) => row.canDispatch)
@@ -5653,6 +5646,7 @@ function MaterialsTab({
                 notes: row.mat.notes ?? '',
                 canDispatch: row.canDispatch,
                 needsPurchase: row.needsPurchase,
+                availableFromOtherProject: row.availableFromOtherProject,
                 inStock: row.inStock,
                 uncovered: row.uncovered,
                 gap: row.gap,
@@ -5710,6 +5704,7 @@ function MaterialsTab({
                 const fullMat = project.materials.find((m) => m.id === mat.id)
                 if (fullMat) openSwitchMaterial(fullMat)
               }}
+              onOpenReception={() => setDispatchRecepcionOpen(true)}
             />
           </div>
         </Card>
@@ -7736,12 +7731,17 @@ function ReturnsTab({
   const { locale, t } = useI18n()
   const [confirmOpen, setConfirmOpen] = useState(false)
   const [confirmReturnId, setConfirmReturnId] = useState<string | null>(null)
+  // Placement por item: 'reception' (default), 'shelf:<shelfId>', o 'scrap'
   const [placements, setPlacements] = useState<Record<string, string>>({})
+  // Para items en scrap: si se aplica el costo al proyecto (default true)
+  const [scrapApplyCost, setScrapApplyCost] = useState<Record<string, boolean>>({})
   const [newReturnOpen, setNewReturnOpen] = useState(false)
   const [newReturnQty, setNewReturnQty] = useState<Record<string, number>>({})
   const [newReturnSearch, setNewReturnSearch] = useState('')
   const [newReturnNotes, setNewReturnNotes] = useState('')
   const [exchangeForms, setExchangeForms] = useState<Record<string, ExchangeForm>>({})
+  const [adjustReturnTarget, setAdjustReturnTarget] = useState<{ returnId: string; status: string; item: ReturnItem } | null>(null)
+  const [adjustReturnQty, setAdjustReturnQty] = useState('')
 
   // Fetch returns independently so this tab doesn't depend on a stale project include
   const { data: returnsData, isLoading: returnsLoading } = useQuery<Return[]>({
@@ -7784,10 +7784,13 @@ function ReturnsTab({
     return map
   }, [project.materials])
 
-  // Already committed to return per delivered product (pending + completed)
-  const returnedByProduct = useMemo(() => {
+  // Pending returns reserve material that is still counted as dispatched.
+  // Completed returns already decrement project.materials.dispatchedQuantity on confirm,
+  // so subtracting them here would double-count the return.
+  const pendingReturnByProduct = useMemo(() => {
     const map = new Map<string, number>()
     for (const r of returns) {
+      if (r.status !== 'pending') continue
       for (const it of r.items) {
         map.set(it.productIdDelivered, (map.get(it.productIdDelivered) || 0) + it.quantityDelivered)
       }
@@ -7811,7 +7814,7 @@ function ReturnsTab({
       if (seen.has(material.productId)) continue
       seen.add(material.productId)
       const dispatched = dispatchedByProduct.get(material.productId) || 0
-      const alreadyReturned = returnedByProduct.get(material.productId) || 0
+      const alreadyReturned = pendingReturnByProduct.get(material.productId) || 0
       const available = Math.max(dispatched - alreadyReturned, 0)
       if (available > 0) {
         out.push({
@@ -7826,7 +7829,7 @@ function ReturnsTab({
       }
     }
     return out
-  }, [project.materials, dispatchedByProduct, returnedByProduct])
+  }, [project.materials, dispatchedByProduct, pendingReturnByProduct])
 
   const filteredReturnCandidates = useMemo(() => {
     const query = newReturnSearch.trim().toLowerCase()
@@ -7909,7 +7912,12 @@ function ReturnsTab({
       placements,
     }: {
       returnId: string
-      placements: { itemId: string; shelfId: string | null }[]
+      placements: {
+        itemId: string
+        destination: 'shelf' | 'reception' | 'scrap'
+        shelfId: string | null
+        applyCost?: boolean
+      }[]
     }) => {
       const res = await fetch(`/api/projects/${project.id}/returns`, {
         method: 'PATCH',
@@ -7921,42 +7929,138 @@ function ReturnsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project-returns', project.id] })
+      queryClient.invalidateQueries({ queryKey: ['project', project.id] })
       queryClient.invalidateQueries({ queryKey: ['products'] })
       queryClient.invalidateQueries({ queryKey: ['recepcion'] })
       toast.success(t('projects.toast.returnConfirmed'))
       setConfirmOpen(false)
       setConfirmReturnId(null)
       setPlacements({})
+      setScrapApplyCost({})
     },
     onError: () => toast.error(t('projects.toast.returnConfirmError')),
+  })
+
+  const adjustReturnMutation = useMutation({
+    mutationFn: async () => {
+      if (!adjustReturnTarget) return null
+      const nextQty = Number(adjustReturnQty)
+      if (!Number.isFinite(nextQty) || nextQty <= 0) throw new Error('La cantidad debe ser mayor que 0')
+      const res = await fetch(`/api/projects/${project.id}/returns`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'adjust_item_quantity',
+          returnId: adjustReturnTarget.returnId,
+          itemId: adjustReturnTarget.item.id,
+          quantityDelivered: nextQty,
+          quantityReturned: nextQty,
+        }),
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}))
+        throw new Error(data.error || 'No se pudo corregir la devolucion')
+      }
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project-returns', project.id] })
+      queryClient.invalidateQueries({ queryKey: ['project', project.id] })
+      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['products'] })
+      queryClient.invalidateQueries({ queryKey: ['recepcion'] })
+      toast.success('Devolucion corregida')
+      setAdjustReturnTarget(null)
+      setAdjustReturnQty('')
+    },
+    onError: (e: Error) => toast.error(e.message),
   })
 
   const openConfirmDialog = (returnId: string) => {
     setConfirmReturnId(returnId)
     setPlacements({})
+    setScrapApplyCost({})
     setConfirmOpen(true)
+  }
+
+  const canAdjustReturnItem = (item: ReturnItem) => item.returnDestination !== 'scrap'
+
+  const getAdjustReturnDescription = () => {
+    if (!adjustReturnTarget) return ''
+    if (adjustReturnTarget.item.changeType === PARTIAL_REMNANT_CHANGE_TYPE) {
+      return adjustReturnTarget.status === 'completed'
+        ? 'Esta devolucion ya fue confirmada como sobrante/corte. Puedes aumentar la cantidad recibida y el sistema ajustara solo la diferencia en recepcion/inventario.'
+        : 'Esta devolucion de sobrante/corte aun no esta confirmada. Puedes cambiar la cantidad antes de confirmarla.'
+    }
+    if (
+      adjustReturnTarget.item.productReturned &&
+      adjustReturnTarget.item.productReturned.id !== adjustReturnTarget.item.productIdDelivered
+    ) {
+      return adjustReturnTarget.status === 'completed'
+        ? 'Esta devolucion ya fue confirmada como cambio de material. Puedes aumentar la cantidad y el sistema ajustara solo la diferencia.'
+        : 'Este cambio de material aun no esta confirmado. Puedes cambiar la cantidad antes de confirmarlo.'
+    }
+    return adjustReturnTarget.status === 'completed'
+      ? 'Esta devolucion ya fue confirmada. Puedes aumentar la cantidad y el sistema ajustara la diferencia en recepcion/inventario.'
+      : 'Esta devolucion aun no esta confirmada. Puedes cambiar la cantidad antes de confirmarla.'
+  }
+
+  const openAdjustReturn = (ret: Return, item: ReturnItem) => {
+    setAdjustReturnTarget({ returnId: ret.id, status: ret.status, item })
+    setAdjustReturnQty(String(item.quantityReturned))
   }
 
   const returnToConfirm = returns.find((r) => r.id === confirmReturnId)
 
   const handleConfirmReturn = () => {
     if (!confirmReturnId || !returnToConfirm) return
-    const payload = returnToConfirm.items.map((item) => ({
-      itemId: item.id,
-      shelfId: placements[item.id] && placements[item.id] !== '__recepcion__'
-        ? placements[item.id]
-        : null,
-    }))
+    const payload = returnToConfirm.items.map((item) => {
+      const value = placements[item.id] || '__recepcion__'
+      if (value === '__scrap__') {
+        return {
+          itemId: item.id,
+          destination: 'scrap' as const,
+          shelfId: null,
+          applyCost: scrapApplyCost[item.id] !== false,
+        }
+      }
+      if (value === '__recepcion__') {
+        return { itemId: item.id, destination: 'reception' as const, shelfId: null }
+      }
+      return { itemId: item.id, destination: 'shelf' as const, shelfId: value }
+    })
     confirmReturnMutation.mutate({ returnId: confirmReturnId, placements: payload })
   }
 
   const setItemPlacement = (itemId: string, value: string) => {
     setPlacements((prev) => ({ ...prev, [itemId]: value }))
+    if (value === '__scrap__') {
+      setScrapApplyCost((prev) => (prev[itemId] === undefined ? { ...prev, [itemId]: true } : prev))
+    }
   }
 
-  const hasUnresolvedShelfChoice = returnToConfirm?.items.some(
-    (i) => placements[i.id] && placements[i.id] !== '__recepcion__' && !allShelves.find((s) => s.id === placements[i.id])
-  )
+  const setItemApplyCost = (itemId: string, value: boolean) => {
+    setScrapApplyCost((prev) => ({ ...prev, [itemId]: value }))
+  }
+
+  const hasUnresolvedShelfChoice = returnToConfirm?.items.some((i) => {
+    const value = placements[i.id]
+    if (!value || value === '__recepcion__' || value === '__scrap__') return false
+    return !allShelves.find((s) => s.id === value)
+  })
+
+  const getEstimatedScrapCost = (item: {
+    productIdDelivered: string
+    productReturned?: { id: string } | null
+    quantityReturned: number
+  }) => {
+    const returnedId = item.productReturned?.id ?? item.productIdDelivered
+    // Los remanentes auto-creados no están en materials: usar el material del producto original.
+    const mat = project.materials.find((m) => m.productId === returnedId)
+      ?? project.materials.find((m) => m.productId === item.productIdDelivered)
+    const price = mat?.product.referencePrice ?? 0
+    return { amount: price * item.quantityReturned, unitPrice: price }
+  }
 
   return (
     <div className="space-y-6">
@@ -8032,9 +8136,23 @@ function ReturnsTab({
                               </>
                             )}
                           </div>
-                          <Badge variant="secondary" className="tabular-nums shrink-0">
-                            x{item.quantityReturned}
-                          </Badge>
+                          <div className="flex shrink-0 items-center gap-1">
+                            <Badge variant="secondary" className="tabular-nums">
+                              x{item.quantityReturned}
+                            </Badge>
+                            {canAdjustReturnItem(item) && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 gap-1 px-2 text-xs"
+                                onClick={() => openAdjustReturn(ret, item)}
+                              >
+                                <Edit3 className="h-3 w-3" />
+                                Corregir
+                              </Button>
+                            )}
+                          </div>
                         </div>
                       ))}
                     </div>
@@ -8065,11 +8183,15 @@ function ReturnsTab({
                       {ret.items.map((item) => {
                         const returned = item.productReturned ?? item.productDelivered
                         const isExchange = item.productReturned && item.productReturned.id !== item.productIdDelivered
-                        const dest = item.shelfTo
-                          ? `${item.shelfTo.rack.warehouse.name} / ${item.shelfTo.name}`
-                          : t('projects.returns.toReception')
+                        const isScrap = item.returnDestination === 'scrap'
+                        const dest = isScrap
+                          ? 'Desechado / Merma'
+                          : item.shelfTo
+                            ? `${item.shelfTo.rack.warehouse.name} / ${item.shelfTo.name}`
+                            : t('projects.returns.toReception')
+                        const scrapPriceInfo = isScrap && item.scrapCharged ? getEstimatedScrapCost(item) : null
                         return (
-                          <div key={item.id} className="flex items-center justify-between text-sm py-1 border-b last:border-0">
+                          <div key={item.id} className={`flex items-center justify-between text-sm py-1 border-b last:border-0 ${isScrap ? 'bg-rose-50/40 -mx-1 px-1 rounded' : ''}`}>
                             <div className="flex items-center gap-2 min-w-0">
                               <Package className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
                               {isExchange ? (
@@ -8081,9 +8203,37 @@ function ReturnsTab({
                               ) : (
                                 <span className="font-medium truncate">{returned.name}</span>
                               )}
-                              <span className="text-xs text-muted-foreground shrink-0">→ {dest}</span>
+                              {isScrap ? (
+                                <Badge className="ml-1 gap-1 bg-rose-50 text-rose-700 border-rose-200 hover:bg-rose-50 shrink-0">
+                                  <Trash2 className="h-3 w-3" /> Merma
+                                </Badge>
+                              ) : (
+                                <span className="text-xs text-muted-foreground shrink-0">→ {dest}</span>
+                              )}
+                              {scrapPriceInfo && scrapPriceInfo.amount > 0 && (
+                                <span className="text-xs text-rose-700 shrink-0">
+                                  · Cargado al proyecto {formatLocaleCurrency(locale, scrapPriceInfo.amount)}
+                                </span>
+                              )}
+                              {isScrap && !item.scrapCharged && (
+                                <span className="text-xs text-rose-700/70 shrink-0">· Sin cargar al proyecto</span>
+                              )}
                             </div>
-                            <Badge variant="secondary" className="tabular-nums shrink-0">x{item.quantityReturned}</Badge>
+                            <div className="flex shrink-0 items-center gap-1">
+                              <Badge variant="secondary" className="tabular-nums">x{item.quantityReturned}</Badge>
+                              {canAdjustReturnItem(item) && (
+                                <Button
+                                  type="button"
+                                  variant="ghost"
+                                  size="sm"
+                                  className="h-7 gap-1 px-2 text-xs"
+                                  onClick={() => openAdjustReturn(ret, item)}
+                                >
+                                  <Edit3 className="h-3 w-3" />
+                                  Corregir
+                                </Button>
+                              )}
+                            </div>
                           </div>
                         )
                       })}
@@ -8095,6 +8245,67 @@ function ReturnsTab({
           )}
         </>
       )}
+
+      {/* Adjust Return Quantity Dialog */}
+      <Dialog
+        open={Boolean(adjustReturnTarget)}
+        onOpenChange={(open) => {
+          if (!open) {
+            setAdjustReturnTarget(null)
+            setAdjustReturnQty('')
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Edit3 className="h-5 w-5 text-amber-500" />
+              Corregir cantidad devuelta
+            </DialogTitle>
+            <DialogDescription>{getAdjustReturnDescription()}</DialogDescription>
+          </DialogHeader>
+          {adjustReturnTarget && (
+            <div className="space-y-4 py-2">
+              <div className="rounded-md border bg-muted/30 p-3">
+                <p className="text-sm font-semibold">{adjustReturnTarget.item.productDelivered.name}</p>
+                <p className="text-xs text-muted-foreground">{adjustReturnTarget.item.productDelivered.code}</p>
+                <p className="mt-2 text-xs text-muted-foreground">
+                  Cantidad actual: <span className="font-semibold text-foreground tabular-nums">{adjustReturnTarget.item.quantityReturned}</span>
+                </p>
+              </div>
+              <div className="space-y-2">
+                <Label>Cantidad correcta</Label>
+                <Input
+                  type="number"
+                  min={adjustReturnTarget.status === 'completed' ? adjustReturnTarget.item.quantityReturned : 1}
+                  step="1"
+                  value={adjustReturnQty}
+                  onChange={(event) => setAdjustReturnQty(event.target.value)}
+                  autoFocus
+                />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setAdjustReturnTarget(null)
+                setAdjustReturnQty('')
+              }}
+            >
+              {t('common.cancel')}
+            </Button>
+            <Button
+              onClick={() => adjustReturnMutation.mutate()}
+              disabled={adjustReturnMutation.isPending || !adjustReturnQty}
+              className="bg-amber-600 text-white hover:bg-amber-700"
+            >
+              {adjustReturnMutation.isPending ? 'Corrigiendo...' : 'Guardar correccion'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* New Return Dialog */}
       <Dialog
@@ -8151,7 +8362,7 @@ function ReturnsTab({
                       <div className="text-xs text-muted-foreground shrink-0">
                         {t('projects.materials.table.dispatched')}: <span className="font-medium text-foreground tabular-nums">{c.dispatched}</span>
                         {c.alreadyReturned > 0 && (
-                          <> · {t('projects.materials.table.returned')}: <span className="tabular-nums">{c.alreadyReturned}</span></>
+                          <> · pendiente de confirmar: <span className="tabular-nums">{c.alreadyReturned}</span></>
                         )}
                         · {t('projects.returns.available')}: <span className="font-medium text-foreground tabular-nums">{c.available}</span>
                       </div>
@@ -8372,7 +8583,7 @@ function ReturnsTab({
                     </div>
                     <Badge variant="secondary" className="tabular-nums shrink-0">x{item.quantityReturned}</Badge>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
                     <Button
                       type="button"
                       variant={current === '__recepcion__' ? 'default' : 'outline'}
@@ -8384,7 +8595,7 @@ function ReturnsTab({
                       {t('projects.returns.sendToReception')}
                     </Button>
                     <Select
-                      value={current === '__recepcion__' ? '' : current}
+                      value={current === '__recepcion__' || current === '__scrap__' ? '' : current}
                       onValueChange={(v) => setItemPlacement(item.id, v)}
                     >
                       <SelectTrigger className="h-9">
@@ -8402,7 +8613,55 @@ function ReturnsTab({
                         )}
                       </SelectContent>
                     </Select>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => setItemPlacement(item.id, '__scrap__')}
+                      className={`gap-2 justify-start ${
+                        current === '__scrap__'
+                          ? 'border-rose-600 bg-rose-50 text-rose-700 ring-2 ring-rose-100 hover:bg-rose-50'
+                          : 'border-rose-200 text-rose-700 hover:bg-rose-50'
+                      }`}
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      Merma
+                    </Button>
                   </div>
+                  {current === '__scrap__' && (() => {
+                    const { amount, unitPrice } = getEstimatedScrapCost(item)
+                    const applyCost = scrapApplyCost[item.id] !== false
+                    return (
+                      <div className="mt-2 flex items-start gap-2.5 rounded-md border border-rose-200 bg-rose-50/60 px-3 py-2">
+                        <button
+                          type="button"
+                          onClick={() => setItemApplyCost(item.id, !applyCost)}
+                          className={`mt-0.5 flex h-4 w-4 shrink-0 items-center justify-center rounded border transition-colors ${
+                            applyCost
+                              ? 'border-rose-600 bg-rose-600 text-white'
+                              : 'border-rose-300 bg-white'
+                          }`}
+                          aria-label="Aplicar costo al proyecto"
+                        >
+                          {applyCost && <Check className="h-3 w-3" strokeWidth={3} />}
+                        </button>
+                        <div className="min-w-0 flex-1">
+                          <div className="text-[12.5px] font-semibold text-rose-800">
+                            Aplicar costo al proyecto
+                          </div>
+                          <div className="text-[11.5px] text-rose-700">
+                            {unitPrice > 0 ? (
+                              <>Se creará un gasto en categoría "Merma" por{' '}
+                              <span className="font-bold tabular-nums">{formatLocaleCurrency(locale, amount)}</span>
+                              <span className="text-rose-500"> ({item.quantityReturned} × {formatLocaleCurrency(locale, unitPrice)})</span></>
+                            ) : (
+                              <>Producto sin precio de referencia — se registrará como Merma sin monto.</>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    )
+                  })()}
                 </div>
               )
             })}

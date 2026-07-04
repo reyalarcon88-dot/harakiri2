@@ -33,7 +33,7 @@ export async function POST(
 
     const materials = await db.projectMaterials.findMany({
       where: { projectId: id },
-      include: { product: { select: { id: true, name: true, code: true, color: true, unitQuantity: true } } },
+      include: { product: { select: { id: true, name: true, code: true, color: true, unitQuantity: true, family: true } } },
     })
 
     // Per-product coverage from non-cancelled purchases of this project.
@@ -75,6 +75,7 @@ export async function POST(
         name: true,
         color: true,
         unitQuantity: true,
+        family: true,
         shelfStocks: {
           select: {
             shelfId: true,

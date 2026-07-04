@@ -362,6 +362,11 @@ model ReturnItems {
   specificationDelivered String @default("") @map("specification_delivered")
   specificationReturned  String @default("") @map("specification_returned")
   notes                 String  @default("")
+  // Destino del item al confirmar la devolución:
+  //   "" (legacy) — usa shelfIdTo: si está set, va al estante; si null, va a recepción
+  //   "scrap"     — merma: NO toca stock, NO entra a recepción, opcionalmente carga costo
+  returnDestination     String  @default("") @map("return_destination")
+  scrapCharged          Boolean @default(false) @map("scrap_charged")
   createdAt             DateTime @default(now()) @map("created_at")
 
   return             Returns   @relation(fields: [returnId], references: [id], onDelete: Cascade)

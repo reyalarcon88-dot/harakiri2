@@ -80,9 +80,9 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (items.some((item: { quantity?: number }) => item.quantity === undefined || item.quantity < 0)) {
+    if (items.some((item: { quantity?: number }) => item.quantity === undefined || item.quantity <= 0)) {
       return NextResponse.json(
-        { error: 'Cada item necesita una cantidad mayor o igual a 0' },
+        { error: 'Cada item necesita una cantidad mayor a 0' },
         { status: 400 }
       )
     }

@@ -419,11 +419,17 @@ export async function POST(request: NextRequest) {
 
         let createdCount = 0
         let createdProductsCount = 0
-        const skippedIncompatibleCount = 0
+        let skippedIncompatibleCount = 0
 
         for (const item of [...groupedRows.values()].sort((a, b) => a.sortOrder - b.sortOrder)) {
           const key = normalizeLookupKey(item.name)
           let product = productsByCode.get(key) || productsByName.get(key) || null
+
+          const itemColor = product ? product.color : inferProductColor(item.name)
+          if (!isProductCompatibleWithProjectColor(color, itemColor)) {
+            skippedIncompatibleCount++
+            continue
+          }
 
           if (!product) {
             product = await tx.products.create({

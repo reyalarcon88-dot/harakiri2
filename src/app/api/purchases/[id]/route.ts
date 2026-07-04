@@ -203,9 +203,9 @@ export async function PUT(
           )
         }
 
-        if (items.some((item: { quantity?: number }) => item.quantity === undefined || item.quantity < 0)) {
+        if (items.some((item: { quantity?: number }) => item.quantity === undefined || item.quantity <= 0)) {
           throw new PurchaseValidationError(
-            'Cada item necesita una cantidad mayor o igual a 0'
+            'Cada item necesita una cantidad mayor a 0'
           )
         }
 

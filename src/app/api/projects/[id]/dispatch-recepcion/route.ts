@@ -53,7 +53,7 @@ export async function GET(
     // Planned products (full info needed for cross-cut detection — code/name/unitQuantity/color)
     const plannedProducts = await db.products.findMany({
       where: { id: { in: pendingProductIds } },
-      select: { id: true, code: true, name: true, color: true, unitQuantity: true },
+      select: { id: true, code: true, name: true, color: true, unitQuantity: true, family: true },
     })
 
     // All recepción items with quantity > 0 (we need to scan across all products,
@@ -62,7 +62,7 @@ export async function GET(
       where: { quantity: { gt: 0 } },
       include: {
         product: {
-          select: { id: true, name: true, code: true, color: true, unitQuantity: true, unitOfMeasure: true },
+          select: { id: true, name: true, code: true, color: true, unitQuantity: true, unitOfMeasure: true, family: true },
         },
         purchase: {
           select: {

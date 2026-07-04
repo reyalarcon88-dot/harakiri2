@@ -14,6 +14,10 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       return NextResponse.json({ error: 'Product not found' }, { status: 404 })
     }
 
+    if (code !== undefined && !String(code).trim()) {
+      return NextResponse.json({ error: 'Product code cannot be empty' }, { status: 400 })
+    }
+
     if (code && code !== existing.code) {
       const codeExists = await db.products.findUnique({ where: { code } })
       if (codeExists) {
@@ -27,8 +31,12 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
       unitOfMeasure: nextUnitOfMeasure,
       unitQuantity: nextUnitQuantity,
     })
-    const baseStockUpdate = currentStock !== undefined
-      ? { currentBaseStock: packagesToBase(Number(currentStock), factor) }
+    // Recalcular el stock base también cuando solo cambia la unidad/factor,
+    // usando el stock vigente si no se envía uno nuevo.
+    const unitChanged = unitOfMeasure !== undefined || unitQuantity !== undefined
+    const effectiveStock = currentStock !== undefined ? Number(currentStock) : Number(existing.currentStock)
+    const baseStockUpdate = currentStock !== undefined || unitChanged
+      ? { currentBaseStock: packagesToBase(effectiveStock, factor) }
       : {}
 
     const product = await db.products.update({

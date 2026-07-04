@@ -39,6 +39,7 @@ import {
 
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { MaterialDispatchReport } from '@/components/modules/reports/MaterialDispatchReport'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ChartContainer, ChartTooltip, ChartTooltipContent, type ChartConfig } from '@/components/ui/chart'
 import {
@@ -672,14 +673,19 @@ export function ReportsModule() {
         </ChartPanel>
       </div>
 
-      <Tabs defaultValue="inventory" className="space-y-4">
-        <TabsList className="grid h-auto w-full grid-cols-2 sm:grid-cols-3 lg:w-auto lg:grid-cols-5">
+      <Tabs defaultValue="report" className="space-y-4">
+        <TabsList className="grid h-auto w-full grid-cols-2 sm:grid-cols-3 lg:w-auto lg:grid-cols-6">
+          <TabsTrigger value="report">{t('reports.tabs.report')}</TabsTrigger>
           <TabsTrigger value="inventory">{t('reports.tabs.inventory')}</TabsTrigger>
           <TabsTrigger value="usage">{t('reports.tabs.usage')}</TabsTrigger>
           <TabsTrigger value="projects">{t('reports.tabs.projects')}</TabsTrigger>
           <TabsTrigger value="purchases">{t('reports.tabs.purchases')}</TabsTrigger>
           <TabsTrigger value="risks">{t('reports.tabs.risks')}</TabsTrigger>
         </TabsList>
+
+        <TabsContent value="report" className="space-y-4">
+          <MaterialDispatchReport />
+        </TabsContent>
 
         <TabsContent value="inventory" className="space-y-4">
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

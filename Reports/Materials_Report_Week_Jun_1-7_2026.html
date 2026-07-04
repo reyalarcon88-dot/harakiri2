@@ -1,0 +1,305 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Materials Report — Week of Jun 1–7, 2026</title>
+<style>
+  :root{
+    --navy:#1f2a44;
+    --navy-soft:#2c3b5e;
+    --bronze:#a9712f;
+    --bronze-soft:#c79a5b;
+    --bg:#f4f5f7;
+    --line:#e3e6ea;
+    --ink:#222831;
+    --muted:#6b7280;
+    --row:#fafbfc;
+  }
+  *{box-sizing:border-box;}
+  body{
+    margin:0;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    background:var(--bg);color:var(--ink);line-height:1.5;-webkit-font-smoothing:antialiased;
+  }
+  .wrap{max-width:1040px;margin:0 auto;padding:0 24px 64px;}
+  header.masthead{
+    background:linear-gradient(135deg,var(--navy) 0%,var(--navy-soft) 100%);
+    color:#fff;padding:40px 24px 34px;margin-bottom:32px;
+    border-bottom:4px solid var(--bronze);
+  }
+  .masthead-inner{max-width:1040px;margin:0 auto;}
+  .eyebrow{font-size:12px;letter-spacing:.18em;text-transform:uppercase;color:var(--bronze-soft);font-weight:600;margin-bottom:8px;}
+  header.masthead h1{margin:0;font-size:28px;font-weight:700;letter-spacing:-.01em;}
+  header.masthead .sub{margin-top:8px;color:#c6cdda;font-size:14px;}
+  .meta-row{margin-top:18px;display:flex;flex-wrap:wrap;gap:24px;font-size:13px;color:#aeb7c8;}
+  .meta-row b{color:#fff;font-weight:600;}
+
+  .cards{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:36px;}
+  .card{background:#fff;border:1px solid var(--line);border-radius:10px;padding:18px 18px 16px;box-shadow:0 1px 2px rgba(20,30,50,.04);}
+  .card .label{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:var(--muted);font-weight:600;}
+  .card .value{font-size:26px;font-weight:700;color:var(--navy);margin-top:6px;line-height:1.1;}
+  .card .note{font-size:12px;color:var(--muted);margin-top:4px;}
+  .card.accent{background:var(--navy);border-color:var(--navy);}
+  .card.accent .label{color:var(--bronze-soft);}
+  .card.accent .value,.card.accent .note{color:#fff;}
+
+  h2.section{font-size:18px;color:var(--navy);margin:40px 0 6px;display:flex;align-items:center;gap:10px;}
+  h2.section::before{content:"";width:5px;height:20px;background:var(--bronze);border-radius:2px;display:inline-block;}
+  .section-note{font-size:13px;color:var(--muted);margin:0 0 14px;}
+
+  table{width:100%;border-collapse:collapse;background:#fff;border:1px solid var(--line);border-radius:10px;overflow:hidden;font-size:13.5px;margin-bottom:8px;}
+  caption{caption-side:top;text-align:left;font-weight:600;color:var(--navy-soft);font-size:14px;padding:14px 16px 6px;}
+  thead th{background:var(--navy);color:#fff;text-align:left;padding:10px 16px;font-weight:600;font-size:12px;letter-spacing:.03em;}
+  thead th.num{text-align:right;}
+  tbody td{padding:9px 16px;border-top:1px solid var(--line);}
+  tbody td.num{text-align:right;font-variant-numeric:tabular-nums;}
+  tbody tr:nth-child(even){background:var(--row);}
+  tbody tr.total td{background:#eef0f4;font-weight:700;color:var(--navy);border-top:2px solid var(--bronze);}
+  .ret{color:var(--bronze);font-weight:600;}
+  .dash{color:#c2c7cf;}
+
+  .proj-grid{display:grid;grid-template-columns:repeat(3,1fr);gap:16px;margin-top:8px;}
+  .proj{background:#fff;border:1px solid var(--line);border-radius:10px;padding:18px;}
+  .proj h3{margin:0 0 2px;font-size:15px;color:var(--navy);}
+  .proj .client{font-size:12.5px;color:var(--muted);margin-bottom:12px;}
+  .badge{display:inline-block;font-size:11px;font-weight:600;padding:2px 9px;border-radius:20px;margin-bottom:10px;}
+  .badge.finished{background:#e7f0e8;color:#2f6b3a;}
+  .badge.dispatched{background:#fdf1e0;color:#9a6418;}
+  .proj dl{margin:0;display:grid;grid-template-columns:1fr auto;gap:6px 12px;font-size:13px;}
+  .proj dt{color:var(--muted);}
+  .proj dd{margin:0;text-align:right;font-weight:600;font-variant-numeric:tabular-nums;}
+
+  .callout{background:#fff;border:1px solid var(--line);border-left:4px solid var(--bronze);border-radius:8px;padding:16px 18px;font-size:13.5px;color:var(--ink);margin-top:18px;}
+  .callout b{color:var(--navy);}
+
+  footer{margin-top:44px;padding-top:18px;border-top:1px solid var(--line);font-size:12px;color:var(--muted);}
+
+  @media (max-width:820px){
+    .cards{grid-template-columns:repeat(2,1fr);}
+    .proj-grid{grid-template-columns:1fr;}
+  }
+  @media print{
+    body{background:#fff;}
+    .card,.proj,table,.callout{box-shadow:none;}
+    header.masthead{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+    thead th,.card.accent{-webkit-print-color-adjust:exact;print-color-adjust:exact;}
+  }
+</style>
+</head>
+<body>
+
+<header class="masthead">
+  <div class="masthead-inner">
+    <div class="eyebrow">RMC Inventory · Job Report</div>
+    <h1>Materials Dispatched — Week of June 1–7, 2026</h1>
+    <div class="sub">Consolidated weekly totals and per-project breakdown</div>
+    <div class="meta-row">
+      <span>Projects: <b>3</b></span>
+      <span>Basis: <b>materials dispatched to job site</b></span>
+      <span>Generated: <b>Jun 7, 2026</b></span>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="cards">
+    <div class="card accent">
+      <div class="label">Total dispatched</div>
+      <div class="value">10,375</div>
+      <div class="note">units · 3 projects</div>
+    </div>
+    <div class="card">
+      <div class="label">Total cost</div>
+      <div class="value">$29,939.89</div>
+      <div class="note">sum of all 3 projects</div>
+    </div>
+    <div class="card">
+      <div class="label">Distinct items</div>
+      <div class="value">~90</div>
+      <div class="note">unique materials this week</div>
+    </div>
+    <div class="card">
+      <div class="label">Returns</div>
+      <div class="value">10</div>
+      <div class="note">units of framing (posts/SMB)</div>
+    </div>
+  </div>
+
+  <!-- ============ WEEKLY TOTALS ============ -->
+  <h2 class="section">Weekly totals (all 3 projects combined)</h2>
+  <p class="section-note">Quantities dispatched to job sites, adding Watstein + Trent + Walker. The "Returned" column shows material that came back to inventory.</p>
+
+  <table>
+    <caption>Fasteners &amp; hardware</caption>
+    <thead><tr><th>Material</th><th class="num">Week total</th></tr></thead>
+    <tbody>
+      <tr><td>TEX SCREW 14X1" BRZ</td><td class="num">6,000</td></tr>
+      <tr><td>TEX SCREW 10X3/4" BRZ</td><td class="num">1,000</td></tr>
+      <tr><td>TEX SCREW 14X3" BRZ</td><td class="num">400</td></tr>
+      <tr><td>SCREW SMS 10X2" BRZ</td><td class="num">370</td></tr>
+      <tr><td>BLUE TAP BLUE 5/16 HEAD 14/6"</td><td class="num">300</td></tr>
+      <tr><td>BLUE TAP NYLON CAPS 1/4" BRZ</td><td class="num">300</td></tr>
+      <tr><td>BLUE TAP NYLON CAPS 3/8" BRZ</td><td class="num">300</td></tr>
+      <tr><td>TEX SCREW 14X2" BRZ</td><td class="num">250</td></tr>
+      <tr><td>BLUE TAP NYLON WASHER 1/4"</td><td class="num">200</td></tr>
+      <tr><td>BLUE TAP NYLON WASHER 3/8"</td><td class="num">200</td></tr>
+      <tr><td>STAINLESS STEEL NUTS DE 3/8"</td><td class="num">185</td></tr>
+      <tr><td>HEX BOLT 3/8X9" ZINC</td><td class="num">158</td></tr>
+      <tr><td>LDT CONCR 3/8 X 5" BRZ</td><td class="num">104</td></tr>
+      <tr><td>BLUE TAP BLUE 5/16 HEAD 14/3"</td><td class="num">102</td></tr>
+      <tr><td>STRUCTURAL SCREW 5" ZINC</td><td class="num">100</td></tr>
+      <tr><td>2X2X1/8 L CLIK 6 HOLE BRZ</td><td class="num">30</td></tr>
+      <tr><td>HEX BOLT 3/8X4" ZINC</td><td class="num">27</td></tr>
+      <tr><td>LDT CONCR 3/8 X 7" BRZ</td><td class="num">16</td></tr>
+      <tr class="total"><td>Fasteners subtotal</td><td class="num">10,042</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <caption>Structural framing</caption>
+    <thead><tr><th>Material</th><th class="num">Dispatched</th><th class="num">Returned</th></tr></thead>
+    <tbody>
+      <tr><td>2X2X30' PATIO BRZ</td><td class="num">27</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X4X20' SMB BRZ</td><td class="num">21</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X7X20' SMB BRZ</td><td class="num">17</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>1X2X24' OB BRZ</td><td class="num">12</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X8X24' SMB BRZ</td><td class="num">10</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X6X20' SMB BRZ</td><td class="num">10</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>1X2X30' OB BRZ</td><td class="num">9</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X9X20' SMB BRZ</td><td class="num">8</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>ZBAR X 17' BRZ</td><td class="num">8</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 8X8X20' POST BRZ</td><td class="num">8</td><td class="num"><span class="ret">6</span></td></tr>
+      <tr><td>RMC 3X7X24' SMB BRZ</td><td class="num">7</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 8X8X10' POST BRZ</td><td class="num">6</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X11X20' SMB BRZ</td><td class="num">6</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X9X24' SMB BRZ</td><td class="num">6</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>COMPOSIF PANEL 4X16'</td><td class="num">6</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>3X2X30' PATIO BRZ</td><td class="num">5</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>TAPE 6"</td><td class="num">5</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>GUTTER 7"X 40' BRZ</td><td class="num">4</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X6X24' SMB BRZ</td><td class="num">4</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X5X24' SMB BRZ</td><td class="num">4</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>2X3X24' PATIO ESPECIAL BRZ</td><td class="num">4</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>GUTTER 7"X 30' BRZ</td><td class="num">3</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>2X2X20' ANGLE BRZ</td><td class="num">3</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>GUSSET PLATE 3/16X10' ALM</td><td class="num">3</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X11X24' SMB BRZ</td><td class="num">2</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>INTERNAL INSTERT POST 4" ALM</td><td class="num">2</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>GUTTER 7"X 24' BRZ</td><td class="num">1</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>STEP GUTTER 30' BRZ</td><td class="num">1</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>4X4X24' POST BRZ</td><td class="num">1</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X6X20' SMB BRZ (short)</td><td class="num">1</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>RMC 3X4X24' SMB BRZ</td><td class="num">1</td><td class="num"><span class="ret">4</span></td></tr>
+      <tr><td>INSERT 3X11X24' RMC</td><td class="num">1</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>3X1X24' RECIVEN CH BRZ</td><td class="num">1</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>2X2X12' RECIVER CH HD BRZ</td><td class="num">1</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr><td>3X2 RECIVEN CH BOX HEADER BRZ</td><td class="num">1</td><td class="num"><span class="dash">—</span></td></tr>
+      <tr class="total"><td>Framing subtotal</td><td class="num">208</td><td class="num"><span class="ret">10</span></td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <caption>Screen &amp; spline</caption>
+    <thead><tr><th>Material</th><th class="num">Week total</th></tr></thead>
+    <tbody>
+      <tr><td>NFL REGULAR SCREEN 18X14X96"</td><td class="num">4</td></tr>
+      <tr><td>FLAT SPLINE 310 AMERICAN V.</td><td class="num">3</td></tr>
+      <tr><td>NFL SUPER SCREEN 17X14X132"</td><td class="num">2</td></tr>
+      <tr><td>NFL REGULAR SCREEN 18X14X120"</td><td class="num">2</td></tr>
+      <tr><td>NFL SUPER SCREEN 17X20X132"</td><td class="num">2</td></tr>
+      <tr class="total"><td>Screen subtotal</td><td class="num">13</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <caption>Doors &amp; door hardware</caption>
+    <thead><tr><th>Material</th><th class="num">Week total</th></tr></thead>
+    <tbody>
+      <tr><td>BUTTERFLAY HINGE BRZ</td><td class="num">12</td></tr>
+      <tr><td>BUGSSWEEP 48" BRZ</td><td class="num">9</td></tr>
+      <tr><td>LATCH AND CLOUSER KIT BRZ</td><td class="num">4</td></tr>
+      <tr><td>4' DOOR BRZ</td><td class="num">3</td></tr>
+      <tr><td>COMPLETE DOOR 4' BRZ</td><td class="num">3</td></tr>
+      <tr><td>BUGSSWEEP 36" BRZ</td><td class="num">2</td></tr>
+      <tr><td>REGULAR DOOR 36" BRZ</td><td class="num">1</td></tr>
+      <tr class="total"><td>Doors subtotal</td><td class="num">34</td></tr>
+    </tbody>
+  </table>
+
+  <table>
+    <caption>Miscellaneous</caption>
+    <thead><tr><th>Material</th><th class="num">Week total</th></tr></thead>
+    <tbody>
+      <tr><td>ELBOW A 3/4" BRZ</td><td class="num">12</td></tr>
+      <tr><td>ELBOW B 3/4" BRZ</td><td class="num">12</td></tr>
+      <tr><td>DOWN SPOT 10'X 3/4 BRZ</td><td class="num">8</td></tr>
+      <tr><td>POOL CABLE TIE 12' WHIT LOOP BRZ</td><td class="num">7</td></tr>
+      <tr><td>DROP OUT 3/4 ALM</td><td class="num">7</td></tr>
+      <tr><td>SOLAR SEALER BRZ</td><td class="num">6</td></tr>
+      <tr><td>END CAP 7" BRZ</td><td class="num">6</td></tr>
+      <tr><td>SOLAR SEALER WHT</td><td class="num">5</td></tr>
+      <tr><td>POOL CABLE TIE 16' WHIT LOOP BRZ</td><td class="num">4</td></tr>
+      <tr><td>POOL CABLE TIE 14' WHIT LOOP BRZ</td><td class="num">4</td></tr>
+      <tr><td>POOL CABLE TIE 10' WHIT LOOP BRZ</td><td class="num">3</td></tr>
+      <tr><td>GROUND LUG KIT CABLE ALM</td><td class="num">2</td></tr>
+      <tr><td>STRUCTURAL SPRAY PAINT BRZ</td><td class="num">2</td></tr>
+      <tr class="total"><td>Miscellaneous subtotal</td><td class="num">78</td></tr>
+    </tbody>
+  </table>
+
+  <div class="callout">
+    <b>Check:</b> Fasteners 10,042 + Framing 208 + Screen 13 + Doors 34 + Miscellaneous 78 = <b>10,375 units</b>, matching the combined total of the 3 projects. After the 10 returns, net consumption was <b>10,365 units</b>.
+  </div>
+
+  <!-- ============ PER PROJECT ============ -->
+  <h2 class="section">Per-project breakdown</h2>
+  <p class="section-note">Each job with its client, status, number of distinct items, units dispatched, and cost.</p>
+
+  <div class="proj-grid">
+    <div class="proj">
+      <span class="badge finished">Finished</span>
+      <h3>Watstein</h3>
+      <div class="client">Watstein, Michael · Mon Jun 1 – Tue Jun 2</div>
+      <dl>
+        <dt>Items</dt><dd>47</dd>
+        <dt>Units dispatched</dt><dd>3,290</dd>
+        <dt>Cost</dt><dd>$9,176.85</dd>
+        <dt>Returns</dt><dd>6 units</dd>
+      </dl>
+    </div>
+    <div class="proj">
+      <span class="badge finished">Finished</span>
+      <h3>Trent</h3>
+      <div class="client">Trent, Kevin / FERNWAH KMT LLC · Wed Jun 3 – Thu Jun 4</div>
+      <dl>
+        <dt>Items</dt><dd>47</dd>
+        <dt>Units dispatched</dt><dd>3,318</dd>
+        <dt>Cost</dt><dd>$9,321.36</dd>
+        <dt>Returns</dt><dd>4 units</dd>
+      </dl>
+    </div>
+    <div class="proj">
+      <span class="badge dispatched">Dispatched</span>
+      <h3>Walker</h3>
+      <div class="client">Walker, Robert &amp; Lisa · Fri Jun 5 – Sat Jun 6</div>
+      <dl>
+        <dt>Items</dt><dd>56</dd>
+        <dt>Units dispatched</dt><dd>3,767</dd>
+        <dt>Cost</dt><dd>$11,441.68</dd>
+        <dt>Returns</dt><dd>0</dd>
+      </dl>
+    </div>
+  </div>
+
+  <div class="callout">
+    <b>Notes for the owner.</b> The highest-volume material of the week is <b>TEX SCREW 14X1" BRZ at 6,000 units</b> (2,000 per job), followed by <b>TEX SCREW 10X3/4" at 1,000</b>. Structural framing (posts, SMB and patio) is size-specific to each job, which is why it leads in variety but not in quantity. The only returns were posts <i>RMC 8X8X20' POST BRZ</i> (6 units across Watstein and Trent) and <i>RMC 3X4X24' SMB BRZ</i> (4 units on Watstein). Watstein and Trent are <b>closed (Finished)</b>; Walker is <b>100% dispatched</b>, pending close-out/invoice.
+  </div>
+
+  <footer>
+    Source: RMC Inventory · Projects module. Basis: quantities actually dispatched to the job site. Document generated June 7, 2026.
+  </footer>
+
+</div>
+</body>
+</html>
