@@ -324,6 +324,11 @@ model DispatchItems {
   shelfId      String? @map("shelf_id")
   quantity     Decimal
   baseQuantity Decimal @default(0) @map("base_quantity")
+  // Cuando este item se despachó tomando material de la recepción de OTRO
+  // proyecto (despacho cruzado), guarda el id del proyecto de origen para que
+  // ese proyecto pueda descontar la cantidad desviada de su cobertura. NULL
+  // para despachos propios / no asignados / originados en devoluciones.
+  sourceProjectId String? @map("source_project_id")
 
   dispatch Dispatches @relation(fields: [dispatchId], references: [id], onDelete: Cascade)
   product  Products   @relation(fields: [productId], references: [id])

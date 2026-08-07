@@ -271,7 +271,32 @@ export async function GET(request: NextRequest) {
       orderBy: { createdAt: 'desc' },
     })
 
-    return NextResponse.json(projects)
+    // Material desviado por proyecto de origen: cantidades que otros proyectos
+    // tomaron de la recepción de cada proyecto (despacho cruzado). Se adjunta a
+    // cada proyecto para descontarlo de su cobertura en la lista.
+    const divertedRows = await db.dispatchItems.findMany({
+      where: { sourceProjectId: { not: null } },
+      select: {
+        productId: true,
+        quantity: true,
+        sourceProjectId: true,
+        dispatch: { select: { projectId: true } },
+      },
+    })
+    const divertedBySource = new Map<string, Record<string, number>>()
+    for (const row of divertedRows) {
+      const source = row.sourceProjectId
+      if (!source || row.dispatch.projectId === source) continue
+      const map = divertedBySource.get(source) ?? {}
+      map[row.productId] = (map[row.productId] ?? 0) + Number(row.quantity)
+      divertedBySource.set(source, map)
+    }
+    const projectsWithDiverted = projects.map((p) => ({
+      ...p,
+      divertedByProduct: divertedBySource.get(p.id) ?? {},
+    }))
+
+    return NextResponse.json(projectsWithDiverted)
   } catch (error) {
     console.error('Error al listar proyectos:', error)
     return NextResponse.json({ error: 'Error al listar proyectos' }, { status: 500 })

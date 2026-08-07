@@ -1094,7 +1094,7 @@ export function MaterialsCompactView({
                           type="button"
                           variant="ghost"
                           size="sm"
-                          className="h-7 gap-1 px-2 text-[11px] text-amber-700 hover:bg-amber-50"
+                          className="h-7 gap-1 px-2 text-[11px] text-orange-700 hover:bg-orange-50"
                           onClick={() => onOpenReception()}
                           title="Disponible en recepción de otro proyecto — revisar para tomarlo"
                         >

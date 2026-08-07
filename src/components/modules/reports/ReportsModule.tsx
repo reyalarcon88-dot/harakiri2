@@ -8,6 +8,7 @@ import {
   CheckCircle2,
   CircleDollarSign,
   Clock,
+  Download,
   FolderKanban,
   History,
   Layers,
@@ -101,6 +102,7 @@ function formatDate(locale: 'en' | 'es', value: string | undefined, fallback: st
 
 const STATUS_LABEL_KEYS: Record<string, MessageKey> = {
   planned: 'status.project.planned',
+  scheduled: 'status.project.scheduled',
   in_progress: 'status.project.inProgress',
   dispatched: 'status.project.dispatched',
   finished: 'status.project.finished',
@@ -199,6 +201,28 @@ const USAGE_PERIOD_HELPER_KEYS: Record<UsagePeriod, MessageKey> = {
   weekly: 'reports.usage.periodHelp.weekly',
   monthly: 'reports.usage.periodHelp.monthly',
   annual: 'reports.usage.periodHelp.annual',
+}
+
+interface ProjectCostRow {
+  id: string
+  name: string
+  poNumber: string
+  clientName: string
+  contractorName: string
+  status: string
+  projectDate: string
+  startDate: string | null
+  endDate: string | null
+  plannedCost: number
+  realCost: number
+  unitsPlanned: number
+  unitsDispatched: number
+}
+
+interface ProjectCostResponse {
+  items: ProjectCostRow[]
+  totals: { count: number; plannedCost: number; realCost: number }
+  generatedAt: string
 }
 
 interface ReportsSummary {
@@ -439,6 +463,57 @@ export function ReportsModule() {
       return res.json()
     },
   })
+
+  // ── Reporte de costo por proyecto (filtrable por estado) ──────────────────
+  const [projectCostStatuses, setProjectCostStatuses] = useState<string[]>([
+    'finished', 'planned', 'scheduled', 'in_progress', 'dispatched',
+  ])
+  const projectCostQuery = useQuery<ProjectCostResponse>({
+    queryKey: ['reports', 'projects', projectCostStatuses],
+    queryFn: async () => {
+      const res = await fetch(`/api/reports/projects?status=${projectCostStatuses.join(',')}`)
+      if (!res.ok) throw new Error('Error cargando costo por proyecto')
+      return res.json()
+    },
+  })
+
+  const toggleProjectCostStatus = (status: string) => {
+    setProjectCostStatuses((current) =>
+      current.includes(status) ? current.filter((s) => s !== status) : [...current, status]
+    )
+  }
+
+  const exportProjectCostCsv = () => {
+    const rows = projectCostQuery.data?.items ?? []
+    const totals = projectCostQuery.data?.totals
+    const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`
+    const header = [
+      t('reports.projectsCost.columns.project'),
+      t('reports.projectsCost.columns.client'),
+      t('reports.projectsCost.columns.status'),
+      'Inicio', 'Fin',
+      t('reports.projectsCost.columns.plannedCost'),
+      t('reports.projectsCost.columns.realCost'),
+    ]
+    const lines = [header.map(esc).join(',')]
+    for (const r of rows) {
+      lines.push([
+        r.poNumber || r.name, r.clientName, r.status,
+        r.startDate ?? '', r.endDate ?? '',
+        Math.round(r.plannedCost), Math.round(r.realCost),
+      ].map(esc).join(','))
+    }
+    if (totals) {
+      lines.push(['TOTAL', '', '', '', '', Math.round(totals.plannedCost), Math.round(totals.realCost)].map(esc).join(','))
+    }
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' })
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `costo-por-proyecto-${new Date().toISOString().slice(0, 10)}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+  }
 
   const monthlyValueConfig = useMemo(
     () =>
@@ -1288,6 +1363,87 @@ export function ReportsModule() {
                 </ChartContainer>
               )}
             </ChartPanel>
+          </div>
+
+          {/* Costo por proyecto — filtro por estado + tabla + totales + CSV */}
+          <div className="rounded-xl border bg-card p-4 shadow-sm">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <h3 className="flex items-center gap-2 text-sm font-semibold">
+                  <FolderKanban className="h-4 w-4 text-muted-foreground" />
+                  {t('reports.projectsCost.title')}
+                </h3>
+                <p className="text-xs text-muted-foreground">{t('reports.projectsCost.description')}</p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={exportProjectCostCsv}
+                disabled={!(projectCostQuery.data?.items?.length)}
+              >
+                <Download className="mr-1.5 h-4 w-4" />
+                {t('reports.projectsCost.exportCsv')}
+              </Button>
+            </div>
+
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(['finished', 'planned', 'scheduled', 'in_progress', 'dispatched', 'cancelled'] as const).map((s) => (
+                <Button
+                  key={s}
+                  type="button"
+                  size="sm"
+                  variant={projectCostStatuses.includes(s) ? 'default' : 'outline'}
+                  onClick={() => toggleProjectCostStatus(s)}
+                >
+                  {t(STATUS_LABEL_KEYS[s] ?? 'status.project.planned')}
+                </Button>
+              ))}
+            </div>
+
+            <div className="mt-4 overflow-x-auto">
+              {projectCostQuery.isLoading ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">…</p>
+              ) : (projectCostQuery.data?.items?.length ?? 0) === 0 ? (
+                <p className="py-6 text-center text-sm text-muted-foreground">
+                  {t('reports.projectsCost.empty')}
+                </p>
+              ) : (
+                <Table>
+                  <TableHeader>
+                    <TableRow>
+                      <TableHead>{t('reports.projectsCost.columns.project')}</TableHead>
+                      <TableHead>{t('reports.projectsCost.columns.status')}</TableHead>
+                      <TableHead>{t('reports.projectsCost.columns.dates')}</TableHead>
+                      <TableHead className="text-right">{t('reports.projectsCost.columns.plannedCost')}</TableHead>
+                      <TableHead className="text-right">{t('reports.projectsCost.columns.realCost')}</TableHead>
+                    </TableRow>
+                  </TableHeader>
+                  <TableBody>
+                    {projectCostQuery.data!.items.map((p) => (
+                      <TableRow key={p.id}>
+                        <TableCell>
+                          <p className="font-medium">{p.poNumber || p.name}</p>
+                          {p.clientName && <p className="text-xs text-muted-foreground">{p.clientName}</p>}
+                        </TableCell>
+                        <TableCell><ProjectStatusBadge status={p.status} /></TableCell>
+                        <TableCell className="whitespace-nowrap text-xs text-muted-foreground">
+                          {formatDate(locale, p.startDate ?? undefined, '—')} → {formatDate(locale, p.endDate ?? undefined, '—')}
+                        </TableCell>
+                        <TableCell className="text-right tabular-nums">{formatCurrency(locale, p.plannedCost)}</TableCell>
+                        <TableCell className="text-right font-semibold tabular-nums">{formatCurrency(locale, p.realCost)}</TableCell>
+                      </TableRow>
+                    ))}
+                    <TableRow className="border-t-2 font-semibold">
+                      <TableCell colSpan={3}>
+                        {t('reports.projectsCost.total', { count: String(projectCostQuery.data!.totals.count) })}
+                      </TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(locale, projectCostQuery.data!.totals.plannedCost)}</TableCell>
+                      <TableCell className="text-right tabular-nums">{formatCurrency(locale, projectCostQuery.data!.totals.realCost)}</TableCell>
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              )}
+            </div>
           </div>
         </TabsContent>
 

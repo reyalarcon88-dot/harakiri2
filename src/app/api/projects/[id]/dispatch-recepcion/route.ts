@@ -317,12 +317,21 @@ export async function POST(
       })
 
       for (const { recep, quantity } of dispatchRecepcionItems) {
+        // Si el material se tomó de la recepción de OTRO proyecto (compra ajena),
+        // registrar ese proyecto de origen para que descuente la cantidad desviada
+        // de su cobertura y vuelva a pedirla. Solo purchase-sourced y de otro
+        // proyecto; propios / no asignados / devoluciones quedan en NULL.
+        const purchaseProjectId = recep.purchase?.projectId ?? null
+        const sourceProjectId =
+          purchaseProjectId && purchaseProjectId !== id ? purchaseProjectId : null
+
         await tx.dispatchItems.create({
           data: {
             dispatchId: dispatch.id,
             productId: recep.productId,
             shelfId: null,
             quantity,
+            sourceProjectId,
           },
         })
 

@@ -48,6 +48,19 @@ export async function POST(
       purchasedByProduct.set(pi.productId, (purchasedByProduct.get(pi.productId) || 0) + pi.quantity)
     }
 
+    // Material desviado: cantidades que otros proyectos tomaron de la recepción
+    // de este proyecto (despacho cruzado). Se descuenta de lo comprado para que
+    // el faltante se vuelva a pedir.
+    const divertedRows = await db.dispatchItems.groupBy({
+      by: ['productId'],
+      where: { sourceProjectId: id, dispatch: { projectId: { not: id } } },
+      _sum: { quantity: true },
+    })
+    const divertedByProduct = new Map<string, number>()
+    for (const row of divertedRows) {
+      divertedByProduct.set(row.productId, Number(row._sum.quantity) || 0)
+    }
+
     // Available shelf stock per product (total minus reserved quantity).
     const materialProductIds = materials.map((m) => m.productId)
     type StockRow = { product_id: string; available: number | string }
@@ -90,7 +103,10 @@ export async function POST(
     // Remaining to order: plan - dispatched - already ordered - available warehouse stock.
     const missingMaterials: { productId: string; productName: string; productCode: string; needed: number }[] = []
     for (const mat of materials) {
-      const purchased = purchasedByProduct.get(mat.productId) || 0
+      const purchased = Math.max(
+        (purchasedByProduct.get(mat.productId) || 0) - (divertedByProduct.get(mat.productId) || 0),
+        0
+      )
       const available = stockByProduct.get(mat.productId) || 0
       const cuttableAvailable = findCuttableSourcesForTarget(mat.product, allProducts)
         .reduce((sum, source) => sum + source.coveredTargetPieces, 0)

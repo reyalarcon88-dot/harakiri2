@@ -210,6 +210,9 @@ interface Project {
   returns?: Return[]
   documents?: ProjectDocument[]
   purchases?: ProjectPurchase[]
+  // Cantidad por producto que otros proyectos tomaron de la recepción de este
+  // proyecto (despacho cruzado). Se descuenta de lo comprado en la cobertura.
+  divertedByProduct?: Record<string, number>
   phases?: ProjectPhase[]
   tasks?: Array<{
     id: string
@@ -744,7 +747,8 @@ function calcPendingActionCount(project: Project, products: Product[] = []): num
       },
       products,
     ).reduce((sum, source) => sum + source.coveredTargetPieces, 0)
-    const purchased = purchasedByProduct.get(material.productId) || 0
+    const diverted = project.divertedByProduct?.[material.productId] ?? 0
+    const purchased = Math.max((purchasedByProduct.get(material.productId) || 0) - diverted, 0)
     const uncovered = Math.max(remaining - purchased - inStock - cuttableStock, 0)
     const canDispatch = inStock > 0 || cuttableStock > 0
     const needsPurchase = uncovered > 0
@@ -934,6 +938,7 @@ export function ProjectsModule() {
     },
     onSuccess: (created) => {
       queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['calendar-projects'] })
       toast.success(t('projects.toast.created'))
       if (created?.autoTemplate?.createdCount > 0) {
         toast.info(
@@ -986,6 +991,7 @@ export function ProjectsModule() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] })
       queryClient.invalidateQueries({ queryKey: ['project'] })
+      queryClient.invalidateQueries({ queryKey: ['calendar-projects'] })
       toast.success(t('projects.toast.updated'))
     },
     onError: (err: Error) => toast.error(err.message || t('projects.toast.updateError')),
@@ -999,6 +1005,7 @@ export function ProjectsModule() {
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['calendar-projects'] })
       setView('list')
       setSelectedProjectId(null)
       toast.success(t('projects.toast.deleted'))
@@ -1015,6 +1022,7 @@ export function ProjectsModule() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['projects'] })
       queryClient.invalidateQueries({ queryKey: ['project'] })
+      queryClient.invalidateQueries({ queryKey: ['calendar-projects'] })
       toast.success(t('projects.toast.cancelled'))
     },
     onError: () => toast.error(t('projects.toast.cancelError')),
@@ -1063,6 +1071,10 @@ export function ProjectsModule() {
   const goBack = () => {
     setView('list')
     setSelectedProjectId(null)
+    // Las ediciones dentro del proyecto marcan la lista como "stale" sin
+    // re-descargarla (para no recargar ~2MB en cada cambio de un campo).
+    // Al volver a la lista la refrescamos una sola vez para actualizar badges.
+    queryClient.invalidateQueries({ queryKey: ['projects'] })
   }
 
   // ─── Render ─────────────────────────────────────────────────────────────────
@@ -4013,7 +4025,7 @@ function MaterialsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       toast.success(t('projects.toast.materialAdded'))
     },
     onError: (err: Error) => toast.error(err.message || t('projects.toast.materialAddError')),
@@ -4028,7 +4040,7 @@ function MaterialsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       toast.success(t('projects.toast.materialDeleted'))
       setDeleteMaterialId(null)
     },
@@ -4044,7 +4056,7 @@ function MaterialsTab({
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       toast.success(t('projects.toast.materialListDeleted', { count: formatLocaleInteger(locale, data.deleted || 0) }))
       setDeleteAllMaterialsOpen(false)
     },
@@ -4064,7 +4076,7 @@ function MaterialsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       toast.success(t('projects.toast.quantityUpdated'))
       setEditingMaterialId(null)
       setEditingQty('')
@@ -4085,7 +4097,7 @@ function MaterialsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       setEditingNoteMaterialId(null)
       setEditingNote('')
     },
@@ -4116,7 +4128,7 @@ function MaterialsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       toast.success(t('projects.toast.materialSwitched'))
       setSwitchingMaterial(null)
     },
@@ -4183,7 +4195,7 @@ function MaterialsTab({
     },
     onSuccess: (data) => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       queryClient.invalidateQueries({ queryKey: ['recepcion'] })
       queryClient.invalidateQueries({ queryKey: ['project-recepcion', project.id] })
       toast.success(t('projects.toast.dispatchReception', {
@@ -4402,7 +4414,10 @@ function MaterialsTab({
     const recepcionStock = recepcionByProduct.get(mat.productId) ?? 0
     const inStock = shelfStock + recepcionStock
     const reservedStock = product?._reservedShelfStock ?? 0
-    const purchased = purchasedByProduct.get(mat.productId) || 0
+    // Descontar el material que otros proyectos tomaron de la recepción de este
+    // proyecto: ya no cubre el plan, así que debe volver a pedirse.
+    const diverted = project.divertedByProduct?.[mat.productId] ?? 0
+    const purchased = Math.max((purchasedByProduct.get(mat.productId) || 0) - diverted, 0)
     const remaining = Math.max(mat.plannedQuantity - mat.dispatchedQuantity, 0)
     const cutSources = findCuttableSourcesForTarget(
       {
@@ -4420,7 +4435,14 @@ function MaterialsTab({
     // the "Despachar" button doesn't appear when the only available material
     // is a longer piece sitting in recepción.
     const recepcionCuttableStock = recepcionCutCandidates
-      .filter((c) => c.targetProduct.id === mat.productId)
+      // Solo cuenta como cobertura automática por corte la recepción de ESTE
+      // proyecto o la sin proyecto asignado. La recepción de otros proyectos no
+      // debe tapar la necesidad de pedir (queda como opción manual en el despacho).
+      .filter(
+        (c) =>
+          c.targetProduct.id === mat.productId &&
+          (c.sourceProjectId === project.id || c.sourceProjectId == null),
+      )
       .reduce((sum, c) => {
         if (c.targetSize <= 0) return sum
         const piecesPerSource = Math.floor(c.originalSize / c.targetSize)
@@ -4614,7 +4636,7 @@ function MaterialsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       queryClient.invalidateQueries({ queryKey: ['products'] })
       queryClient.invalidateQueries({ queryKey: ['recepcion'] })
       queryClient.invalidateQueries({ queryKey: ['project-recepcion', project.id] })
@@ -4644,7 +4666,7 @@ function MaterialsTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       queryClient.invalidateQueries({ queryKey: ['products'] })
       queryClient.invalidateQueries({ queryKey: ['recepcion'] })
       queryClient.invalidateQueries({ queryKey: ['project-recepcion', project.id] })
@@ -6682,14 +6704,14 @@ function MaterialsTab({
 
                 {/* ─── Section B: Cross-project suggestions ─── */}
                 {crossProjectRecepcion.length > 0 && (
-                  <div className="rounded-md border border-amber-200 bg-amber-50/50 p-3 dark:border-amber-900/50 dark:bg-amber-950/30">
+                  <div className="rounded-md border border-orange-200 bg-orange-50/50 p-3 dark:border-orange-900/50 dark:bg-orange-950/30">
                     <div className="mb-2 flex items-start gap-2">
-                      <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 mt-0.5" />
+                      <AlertTriangle className="h-4 w-4 shrink-0 text-orange-600 mt-0.5" />
                       <div className="flex-1">
-                        <h4 className="text-xs font-bold uppercase tracking-wide text-amber-800 dark:text-amber-300">
+                        <h4 className="text-xs font-bold uppercase tracking-wide text-orange-800 dark:text-orange-300">
                           ¿Tomar de otros proyectos?
                         </h4>
-                        <p className="text-[11px] text-amber-700 dark:text-amber-400 mt-0.5">
+                        <p className="text-[11px] text-orange-700 dark:text-orange-400 mt-0.5">
                           Tu proyecto no cubre todos los materiales. Encontramos {crossProjectRecepcion.length} {crossProjectRecepcion.length === 1 ? 'item' : 'items'} en recepción de otros proyectos que podrían completarlo. Marca los que quieras consumir.
                         </p>
                       </div>
@@ -6710,7 +6732,7 @@ function MaterialsTab({
                             return (
                               <TableRow
                                 key={it.id}
-                                className={`cursor-pointer ${checked ? 'bg-amber-50/60 dark:bg-amber-950/40' : ''}`}
+                                className={`cursor-pointer ${checked ? 'bg-orange-50/60 dark:bg-orange-950/40' : ''}`}
                                 onClick={() => {
                                   setSelectedCrossProjectIds((prev) => {
                                     const next = new Set(prev)
@@ -6725,7 +6747,7 @@ function MaterialsTab({
                                     type="checkbox"
                                     checked={checked}
                                     onChange={() => {}}
-                                    className="h-4 w-4 rounded border-amber-400 text-amber-600 focus:ring-amber-400 cursor-pointer"
+                                    className="h-4 w-4 rounded border-orange-400 text-orange-600 focus:ring-orange-400 cursor-pointer"
                                   />
                                 </TableCell>
                                 <TableCell>
@@ -6738,7 +6760,7 @@ function MaterialsTab({
                                   {it.quantity} {it.product.unitOfMeasure}
                                 </TableCell>
                                 <TableCell>
-                                  <Badge variant="outline" className="text-[10px] border-amber-300 bg-amber-50 text-amber-800 dark:border-amber-700 dark:bg-amber-950/60 dark:text-amber-300">
+                                  <Badge variant="outline" className="text-[10px] border-orange-300 bg-orange-50 text-orange-800 dark:border-orange-700 dark:bg-orange-950/60 dark:text-orange-300">
                                     {it.sourceProjectName ?? 'Otro proyecto'}
                                   </Badge>
                                 </TableCell>
@@ -7021,6 +7043,7 @@ function DispatchesTab({
   const [newDispatchOpen, setNewDispatchOpen] = useState(false)
   const [dispatchProductPickerOpen, setDispatchProductPickerOpen] = useState<number | null>(null)
   const [expandedDispatch, setExpandedDispatch] = useState<string | null>(null)
+  const [deleteDispatchId, setDeleteDispatchId] = useState<string | null>(null)
   const [dispatchDate, setDispatchDate] = useState(new Date().toISOString().split('T')[0])
   const [dispatchNotes, setDispatchNotes] = useState('')
   const [dispatchItems, setDispatchItems] = useState<{ productId: string; shelfId: string; quantity: number }[]>([])
@@ -7078,13 +7101,36 @@ function DispatchesTab({
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['project'] })
-      queryClient.invalidateQueries({ queryKey: ['projects'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
       queryClient.invalidateQueries({ queryKey: ['products'] })
       toast.success(t('projects.toast.dispatchCreated'))
       setNewDispatchOpen(false)
       resetDispatchForm()
     },
     onError: (err: Error) => toast.error(err.message || t('projects.toast.dispatchCreateError')),
+  })
+
+  const deleteDispatchMutation = useMutation({
+    mutationFn: async (dispatchId: string) => {
+      const res = await fetch(`/api/projects/${project.id}/dispatches/${dispatchId}`, {
+        method: 'DELETE',
+      })
+      if (!res.ok) {
+        const data = await res.json().catch(() => null)
+        throw new Error(data?.error || t('projects.toast.dispatchDeleteError'))
+      }
+      return res.json()
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['project'] })
+      queryClient.invalidateQueries({ queryKey: ['projects'], refetchType: 'none' })
+      queryClient.invalidateQueries({ queryKey: ['products'] })
+      queryClient.invalidateQueries({ queryKey: ['recepcion'] })
+      queryClient.invalidateQueries({ queryKey: ['project-recepcion', project.id] })
+      toast.success(t('projects.toast.dispatchDeleted'))
+      setDeleteDispatchId(null)
+    },
+    onError: (err: Error) => toast.error(err.message || t('projects.toast.dispatchDeleteError')),
   })
 
   const resetDispatchForm = () => {
@@ -7278,34 +7324,53 @@ function DispatchesTab({
         <div className="space-y-3">
           {project.dispatches.map((dispatch) => (
             <Card key={dispatch.id} className="overflow-hidden">
-              <button
-                className="w-full text-left"
-                onClick={() => setExpandedDispatch(expandedDispatch === dispatch.id ? null : dispatch.id)}
-              >
-                <CardContent className="p-4">
-                  <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-3">
-                      {expandedDispatch === dispatch.id ? (
-                        <ChevronDown className="h-4 w-4 text-muted-foreground" />
-                      ) : (
-                        <ChevronRight className="h-4 w-4 text-muted-foreground" />
-                      )}
-                      <div>
-                        <p className="font-medium text-sm flex items-center gap-2">
-                          <Truck className="h-4 w-4 text-amber-500" />
-                          {t('projects.dispatches.itemTitle', { date: formatDate(locale, dispatch.dispatchDate) })}
-                        </p>
-                        {dispatch.notes && <p className="text-xs text-muted-foreground mt-0.5">{dispatch.notes}</p>}
+              <div className="flex items-stretch">
+                <button
+                  className="min-w-0 flex-1 text-left"
+                  onClick={() => setExpandedDispatch(expandedDispatch === dispatch.id ? null : dispatch.id)}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex min-w-0 items-center gap-3">
+                        {expandedDispatch === dispatch.id ? (
+                          <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        ) : (
+                          <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        )}
+                        <div className="min-w-0">
+                          <p className="font-medium text-sm flex items-center gap-2">
+                            <Truck className="h-4 w-4 shrink-0 text-amber-500" />
+                            {t('projects.dispatches.itemTitle', { date: formatDate(locale, dispatch.dispatchDate) })}
+                          </p>
+                          {dispatch.notes && <p className="text-xs text-muted-foreground mt-0.5 truncate">{dispatch.notes}</p>}
+                        </div>
                       </div>
+                      <Badge variant="secondary" className="shrink-0 text-xs tabular-nums">
+                        {dispatch.items.length === 1
+                          ? t('projects.dispatches.productsOne', { count: formatLocaleInteger(locale, dispatch.items.length) })
+                          : t('projects.dispatches.productsOther', { count: formatLocaleInteger(locale, dispatch.items.length) })}
+                      </Badge>
                     </div>
-                    <Badge variant="secondary" className="text-xs tabular-nums">
-                      {dispatch.items.length === 1
-                        ? t('projects.dispatches.productsOne', { count: formatLocaleInteger(locale, dispatch.items.length) })
-                        : t('projects.dispatches.productsOther', { count: formatLocaleInteger(locale, dispatch.items.length) })}
-                    </Badge>
-                  </div>
-                </CardContent>
-              </button>
+                  </CardContent>
+                </button>
+                <div className="flex items-center pr-3">
+                  <Button
+                    type="button"
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-muted-foreground hover:bg-rose-50 hover:text-rose-600"
+                    onClick={(e) => {
+                      e.stopPropagation()
+                      setDeleteDispatchId(dispatch.id)
+                    }}
+                    disabled={deleteDispatchMutation.isPending}
+                    title={t('projects.dispatches.undo')}
+                    aria-label={t('projects.dispatches.undo')}
+                  >
+                    <RotateCcw className="h-4 w-4" />
+                  </Button>
+                </div>
+              </div>
 
               {expandedDispatch === dispatch.id && (
                 <div className="border-t bg-muted/30">
@@ -7553,6 +7618,41 @@ function DispatchesTab({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      <ConfirmDeleteDialog
+        open={!!deleteDispatchId}
+        onOpenChange={() => setDeleteDispatchId(null)}
+        onConfirm={() => deleteDispatchId && deleteDispatchMutation.mutate(deleteDispatchId)}
+        title={t('projects.confirm.deleteDispatchTitle')}
+        description={t('projects.confirm.deleteDispatchDescription')}
+      >
+        {(() => {
+          const dispatch = project.dispatches.find((d) => d.id === deleteDispatchId)
+          if (!dispatch) return null
+          return (
+            <div className="rounded-md border bg-muted/40 p-3 text-sm">
+              <p className="mb-2 font-medium">
+                {t('projects.dispatches.itemTitle', { date: formatDate(locale, dispatch.dispatchDate) })}
+              </p>
+              <ul className="space-y-1">
+                {dispatch.items.map((item) => (
+                  <li key={item.id} className="flex items-center justify-between gap-2">
+                    <span className="min-w-0 truncate">
+                      {item.product.name}
+                      <span className="ml-1 text-xs text-muted-foreground">
+                        {item.shelf
+                          ? `${item.shelf.rack.warehouse.name} / ${item.shelf.rack.name} / ${item.shelf.name}`
+                          : t('projects.dispatches.directFromReception')}
+                      </span>
+                    </span>
+                    <span className="shrink-0 font-mono tabular-nums">{formatLocaleInteger(locale, item.quantity)}</span>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )
+        })()}
+      </ConfirmDeleteDialog>
     </div>
   )
 }

@@ -229,7 +229,20 @@ export async function GET(
       return NextResponse.json({ error: 'Proyecto no encontrado' }, { status: 404 })
     }
 
-    return NextResponse.json(project)
+    // Material desviado: cantidades que OTROS proyectos tomaron de la recepción
+    // de este proyecto (despacho cruzado). Se descuenta de la cobertura para que
+    // este proyecto vuelva a mostrar que necesita reordenar ese material.
+    const divertedRows = await db.dispatchItems.groupBy({
+      by: ['productId'],
+      where: { sourceProjectId: id, dispatch: { projectId: { not: id } } },
+      _sum: { quantity: true },
+    })
+    const divertedByProduct: Record<string, number> = {}
+    for (const row of divertedRows) {
+      divertedByProduct[row.productId] = Number(row._sum.quantity) || 0
+    }
+
+    return NextResponse.json({ ...project, divertedByProduct })
   } catch (error) {
     console.error('Error al obtener proyecto:', error)
     return NextResponse.json({ error: 'Error al obtener proyecto' }, { status: 500 })
